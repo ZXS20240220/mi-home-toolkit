@@ -5,11 +5,13 @@ import {
   inject,
   model,
   output,
+  signal,
 } from '@angular/core'
 import { injectMutation } from '@tanstack/angular-query-experimental'
 import { MiService } from '../../mi.service'
 import { CommonModule } from '@angular/common'
 import { DialogDirective } from '../dialog.directive'
+import { IconComponent } from '../../icon/icon.component'
 import { FormBuilder, FormsModule, ReactiveFormsModule } from '@angular/forms'
 
 @Component({
@@ -65,17 +67,42 @@ import { FormBuilder, FormsModule, ReactiveFormsModule } from '@angular/forms'
         ></textarea>
       </div>
 
-      <button
-        class="btn mt-4"
-        type="submit"
-        [disabled]="callDeviceMutation.isPending()"
-      >
-        Execute
-      </button>
+      <div class="mt-4 flex items-center justify-between">
+        <button
+          class="btn"
+          type="submit"
+          [disabled]="callDeviceMutation.isPending()"
+        >
+          Execute
+        </button>
+
+        <div class="tooltip tooltip-left" data-tip="Refresh device info">
+          <button
+            type="button"
+            class="btn btn-sm btn-circle btn-outline"
+            (click)="refreshDevice()"
+            [disabled]="
+              refreshing() || callDeviceMutation.isPending() || !did()
+            "
+          >
+            @if (refreshing()) {
+              <span class="loading loading-spinner loading-xs"></span>
+            } @else {
+              <app-icon class="w-4 h-4" icon="refresh" />
+            }
+          </button>
+        </div>
+      </div>
     </form>
   </dialog>`,
   styles: [``],
-  imports: [CommonModule, DialogDirective, FormsModule, ReactiveFormsModule],
+  imports: [
+    CommonModule,
+    DialogDirective,
+    FormsModule,
+    ReactiveFormsModule,
+    IconComponent,
+  ],
 })
 export class ExecuteCommandDialogComponent {
   fb = inject(FormBuilder)
@@ -84,6 +111,8 @@ export class ExecuteCommandDialogComponent {
   visible = computed(() => !!this.device())
 
   success = output()
+
+  refreshing = signal(false)
 
   miService = inject(MiService)
 
@@ -127,5 +156,31 @@ export class ExecuteCommandDialogComponent {
     const { method, params } = this.form.value
     if (!did || !method) return
     this.callDeviceMutation.mutate({ did, method, params })
+  }
+
+  /** 重新查询该设备的信息，结果写入 Result；同时通知父组件刷新设备卡片 */
+  async refreshDevice() {
+    const did = this.did()?.toString()
+    if (!did || this.refreshing()) return
+
+    const result = this.form.controls.result
+    this.refreshing.set(true)
+    result.setValue('Loading...')
+    try {
+      const device = await this.miService.getDevice(did)
+      if (!device) throw new Error('设备没有返回信息')
+      result.setValue(JSON.stringify(device, null, 2))
+      this.success.emit()
+    } catch (err) {
+      result.setValue(
+        typeof err === 'string'
+          ? err
+          : err instanceof Error
+            ? err.message
+            : String(err)
+      )
+    } finally {
+      this.refreshing.set(false)
+    }
   }
 }
