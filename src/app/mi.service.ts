@@ -14,6 +14,24 @@ export class MiService {
     return invoke<{ email: string; country?: string } | null>('restore_session')
   }
 
+  logout() {
+    return invoke('logout')
+  }
+
+  getSavedCredentials() {
+    return invoke<{ email: string; password: string; country?: string } | null>(
+      'get_saved_credentials'
+    )
+  }
+
+  saveCredentials(creds: { email: string; password: string; country?: string }) {
+    return invoke('save_credentials', creds)
+  }
+
+  clearCredentials() {
+    return invoke('clear_credentials')
+  }
+
   setCountry(country: string) {
     return invoke('set_country', { country })
   }

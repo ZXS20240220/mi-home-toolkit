@@ -6,6 +6,7 @@ import {
   signal,
   viewChildren,
 } from '@angular/core'
+import { Router } from '@angular/router'
 import { DeviceComponent } from '../card/device.component'
 import { MiService } from '../mi.service'
 import { IconComponent } from '../icon/icon.component'
@@ -27,6 +28,20 @@ import { Device } from '../types'
           <span class="loading loading-spinner loading-md"> </span>
         } @else {
           <app-icon class="w-6 h-6" icon="refresh" />
+        }
+      </button>
+    </div>
+
+    <div class="tooltip fixed left-4 bottom-4 z-1" data-tip="Logout">
+      <button
+        class="btn btn-circle btn-outline"
+        (click)="logout()"
+        [disabled]="loggingOut()"
+      >
+        @if (loggingOut()) {
+          <span class="loading loading-spinner loading-md"> </span>
+        } @else {
+          <app-icon class="w-6 h-6" icon="logout" />
         }
       </button>
     </div>
@@ -83,11 +98,24 @@ import { Device } from '../types'
 export class DevicesPageComponent {
   executeCommandForDevice = signal<Device | null>(null)
   changeCountryDialogVisible = signal(false)
+  loggingOut = signal(false)
 
   miService = inject(MiService)
   authService = inject(AuthService)
+  router = inject(Router)
 
   deviceComponents = viewChildren(DeviceComponent)
+
+  async logout() {
+    if (this.loggingOut()) return
+    this.loggingOut.set(true)
+    try {
+      await this.authService.logout()
+      await this.router.navigateByUrl('login')
+    } finally {
+      this.loggingOut.set(false)
+    }
+  }
 
   devicesQuery = injectQuery(() => ({
     queryKey: ['devices'],

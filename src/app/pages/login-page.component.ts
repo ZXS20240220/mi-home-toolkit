@@ -39,6 +39,16 @@ import { MiService } from '../mi.service'
         <input [formControlName]="'password'" type="password" placeholder="Password" />
       </label>
 
+      <label class="label justify-start gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          class="checkbox checkbox-sm"
+          [checked]="remember()"
+          (change)="remember.set($any($event.target).checked)"
+        />
+        <span class="label-text">Remember email &amp; password</span>
+      </label>
+
       <select class="select" [formControlName]="'country'">
         <option disabled>Server location</option>
         <option *ngFor="let country of countries()" [value]="country[0]">
@@ -189,11 +199,40 @@ export class LoginPageComponent {
         this.captchaHandler.bind(this),
         this.twoFactorHandler.bind(this),
       ),
-    onSuccess: () => this.router.navigateByUrl('devices'),
+    onSuccess: async (_data, credentials) => {
+      if (this.remember()) {
+        await this.miService
+          .saveCredentials({
+            email: credentials.email,
+            password: credentials.password,
+            country: credentials.country,
+          })
+          .catch(() => undefined)
+      } else {
+        await this.miService.clearCredentials().catch(() => undefined)
+      }
+      await this.router.navigateByUrl('devices')
+    },
   }))
   loading = computed(() => this.loginMutation.isPending())
 
   countries = this.miService.countries.value
+  remember = signal(false)
+
+  constructor() {
+    this.miService
+      .getSavedCredentials()
+      .then((saved) => {
+        if (!saved) return
+        this.form.patchValue({
+          email: saved.email,
+          password: saved.password,
+          ...(saved.country ? { country: saved.country } : {}),
+        })
+        this.remember.set(true)
+      })
+      .catch(() => undefined)
+  }
 
   captchaInputEl = viewChild<ElementRef<HTMLInputElement>>('captchaInputEl')
   captcha = signal<string | null>(null)

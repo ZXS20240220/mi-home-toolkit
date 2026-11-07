@@ -6,7 +6,7 @@ extern crate miio;
 extern crate serde_json;
 
 use miio::{Device, MiCloudProtocol, SessionSnapshot};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{path::PathBuf, str::FromStr, sync::OnceLock};
 use tauri::{AppHandle, Emitter, Listener, Manager};
@@ -26,6 +26,21 @@ fn mi_cloud() -> &'static MiCloudProtocol {
 struct SessionUser {
     email: String,
     country: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SavedLogin {
+    email: String,
+    password: String,
+    #[serde(default)]
+    country: Option<String>,
+}
+
+const KEYRING_SERVICE: &str = "com.mi-home-toolkit";
+const KEYRING_ACCOUNT: &str = "login-credentials";
+
+fn credentials_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT).map_err(|err| err.to_string())
 }
 
 fn session_file(app: &AppHandle) -> Result<PathBuf, String> {
@@ -112,6 +127,52 @@ async fn get_countries() -> Vec<Vec<&'static str>> {
     mi_cloud().get_available_countries()
 }
 
+/// 读取本地保存的登录凭据（由系统凭据库加密存储）
+#[tauri::command]
+fn get_saved_credentials() -> Result<Option<SavedLogin>, String> {
+    match credentials_entry()?.get_password() {
+        Ok(raw) => serde_json::from_str::<SavedLogin>(&raw)
+            .map(Some)
+            .map_err(|err| err.to_string()),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+#[tauri::command]
+fn save_credentials(email: String, password: String, country: Option<String>) -> Result<(), String> {
+    let payload = serde_json::to_string(&SavedLogin {
+        email,
+        password,
+        country,
+    })
+    .map_err(|err| err.to_string())?;
+    credentials_entry()?
+        .set_password(&payload)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn clear_credentials() -> Result<(), String> {
+    match credentials_entry()?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+/// 退出登录：清除内存会话并删除持久化的 session.json（保留"记住密码"凭据）
+#[tauri::command]
+async fn logout(app: AppHandle) {
+    mi_cloud().clear_session();
+    if let Ok(path) = session_file(&app) {
+        if let Err(err) = std::fs::remove_file(&path) {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                log::warn!("删除登录状态文件失败: {err}");
+            }
+        }
+    }
+}
+
 #[tauri::command]
 async fn set_country(app: AppHandle, country: String) {
     mi_cloud().set_country(&country);
@@ -160,6 +221,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             login,
             restore_session,
+            logout,
+            get_saved_credentials,
+            save_credentials,
+            clear_credentials,
             get_countries,
             set_country,
             get_device,

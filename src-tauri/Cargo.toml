@@ -24,3 +24,13 @@ tauri-plugin-log = "2.4.0"
 tauri-plugin-shell = "2.2.1"
 tokio = {version = "1.37.0", features = ["full"] }
 trace = "0.1.7"
+
+# "记住密码"使用系统凭据库（Windows 凭据管理器 / macOS 钥匙串 / Linux secret service）
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = {version = "3.6", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = {version = "3.6", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+keyring = {version = "3.6", default-features = false, features = ["sync-secret-service", "crypto-rust"] }

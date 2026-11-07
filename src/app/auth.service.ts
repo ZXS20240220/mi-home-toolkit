@@ -34,6 +34,11 @@ export class AuthService {
     return this.initPromise
   }
 
+  async logout() {
+    await this.miService.logout().catch(() => undefined)
+    this.user$.next(null)
+  }
+
   async setCountry(country: string) {
     const res = this.miService.setCountry(country)
     this.user$.next({ ...this.user$.value!, country })
