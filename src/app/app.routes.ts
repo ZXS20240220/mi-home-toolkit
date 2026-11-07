@@ -1,29 +1,27 @@
 import { inject } from '@angular/core'
 import { CanActivateFn, Router, Routes } from '@angular/router'
 import { AuthService } from './auth.service'
-import { tap } from 'rxjs'
-
-const loggedInGuard = () => {
-  const authService = inject(AuthService)
-  return authService.loggedIn$
-}
 
 const loggedInGuardWithRedirect =
   (url: string): CanActivateFn =>
-  () => {
+  async () => {
+    const authService = inject(AuthService)
     const router = inject(Router)
-    return loggedInGuard().pipe(
-      tap((loggedIn) => !loggedIn && router.navigateByUrl(url))
-    )
+    await authService.init()
+    if (authService.isLoggedIn) return true
+    await router.navigateByUrl(url)
+    return false
   }
 
 const notLoggedInGuardWithRedirect =
   (url: string): CanActivateFn =>
-  () => {
+  async () => {
+    const authService = inject(AuthService)
     const router = inject(Router)
-    return loggedInGuard().pipe(
-      tap((loggedIn) => loggedIn && router.navigateByUrl(url))
-    )
+    await authService.init()
+    if (!authService.isLoggedIn) return true
+    await router.navigateByUrl(url)
+    return false
   }
 
 export const routes: Routes = [
@@ -31,6 +29,7 @@ export const routes: Routes = [
     path: 'login',
     loadComponent: () =>
       import('./pages/login-page.component').then((m) => m.LoginPageComponent),
+    canActivate: [notLoggedInGuardWithRedirect('devices')],
   },
   {
     path: 'devices',

@@ -2116,6 +2116,7 @@ version = "1.4.2"
 dependencies = [
  "anyhow",
  "lazy_static",
+ "log",
  "miio",
  "serde",
  "serde_json",

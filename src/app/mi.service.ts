@@ -10,6 +10,10 @@ export class MiService {
     return invoke('login', creds)
   }
 
+  restoreSession() {
+    return invoke<{ email: string; country?: string } | null>('restore_session')
+  }
+
   setCountry(country: string) {
     return invoke('set_country', { country })
   }

@@ -5,10 +5,11 @@ extern crate anyhow;
 extern crate miio;
 extern crate serde_json;
 
-use miio::{Device, MiCloudProtocol};
+use miio::{Device, MiCloudProtocol, SessionSnapshot};
+use serde::Serialize;
 use serde_json::Value;
-use std::{str::FromStr, sync::OnceLock};
-use tauri::{Emitter, Listener};
+use std::{path::PathBuf, str::FromStr, sync::OnceLock};
+use tauri::{AppHandle, Emitter, Listener, Manager};
 use tauri_plugin_log::{Builder, Target, TargetKind};
 
 /// 全局唯一的 Mi Cloud 客户端。
@@ -21,18 +22,89 @@ fn mi_cloud() -> &'static MiCloudProtocol {
         .expect("MiCloudProtocol 应在 setup 阶段完成初始化")
 }
 
+#[derive(Serialize)]
+struct SessionUser {
+    email: String,
+    country: String,
+}
+
+fn session_file(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_config_dir()
+        .map(|dir| dir.join("session.json"))
+        .map_err(|err| err.to_string())
+}
+
+/// 把当前登录凭证写入配置文件；未登录时不做任何事
+fn save_session(app: &AppHandle) {
+    let Some(snapshot) = mi_cloud().session_snapshot() else {
+        return;
+    };
+    let path = match session_file(app) {
+        Ok(path) => path,
+        Err(err) => return log::warn!("无法获取会话文件路径: {err}"),
+    };
+    if let Some(parent) = path.parent() {
+        if let Err(err) = std::fs::create_dir_all(parent) {
+            return log::warn!("无法创建配置目录: {err}");
+        }
+    }
+    let data = match serde_json::to_vec_pretty(&snapshot) {
+        Ok(data) => data,
+        Err(err) => return log::warn!("序列化登录状态失败: {err}"),
+    };
+    match std::fs::write(&path, data) {
+        Ok(()) => log::info!("登录状态已保存到 {}", path.display()),
+        Err(err) => log::warn!("保存登录状态失败: {err}"),
+    }
+}
+
+fn load_session(app: &AppHandle) -> Option<SessionSnapshot> {
+    let path = session_file(app).ok()?;
+    let data = std::fs::read(path).ok()?;
+    serde_json::from_slice(&data).ok()
+}
+
 //TODO: rm .map_err(|_| ()) https://tauri.app/v1/guides/features/command/#error-handling
 
 // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
 #[tauri::command]
-async fn login(email: String, password: String, country: Option<String>) -> Result<(), String> {
+async fn login(
+    app: AppHandle,
+    email: String,
+    password: String,
+    country: Option<String>,
+) -> Result<(), String> {
     let mi = mi_cloud();
     if let Some(c) = country {
         mi.set_country(&c);
     }
     mi.login(email.as_str(), password.as_str())
         .await
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    save_session(&app);
+    Ok(())
+}
+
+/// 启动时恢复上次的登录状态；凭证失效则清除内存状态并返回 `None`
+#[tauri::command]
+async fn restore_session(app: AppHandle) -> Option<SessionUser> {
+    let mi = mi_cloud();
+    let snapshot = load_session(&app)?;
+    let user = SessionUser {
+        email: snapshot.username.clone(),
+        country: snapshot.country.clone(),
+    };
+    mi.restore_session(snapshot);
+
+    match mi.get_devices(None, None).await {
+        Ok(_) => Some(user),
+        Err(err) => {
+            log::warn!("持久化的登录状态已失效: {err}");
+            mi.clear_session();
+            None
+        }
+    }
 }
 
 #[tauri::command]
@@ -41,8 +113,11 @@ async fn get_countries() -> Vec<Vec<&'static str>> {
 }
 
 #[tauri::command]
-async fn set_country(country: String) {
-    mi_cloud().set_country(&country)
+async fn set_country(app: AppHandle, country: String) {
+    mi_cloud().set_country(&country);
+    if mi_cloud().is_logged_in() {
+        save_session(&app);
+    }
 }
 
 #[tauri::command]
@@ -84,6 +159,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             login,
+            restore_session,
             get_countries,
             set_country,
             get_device,

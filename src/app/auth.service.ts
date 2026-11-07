@@ -16,6 +16,24 @@ export class AuthService {
   user = toSignal(this.user$)
   loggedIn$ = this.user$.pipe(map(Boolean))
 
+  private initPromise?: Promise<User | null>
+
+  get isLoggedIn() {
+    return this.user$.value !== null
+  }
+
+  /** 启动时尝试恢复上次的登录状态；多次调用只执行一次 */
+  init() {
+    this.initPromise ??= this.miService
+      .restoreSession()
+      .catch(() => null)
+      .then((user) => {
+        if (user) this.user$.next(user)
+        return user
+      })
+    return this.initPromise
+  }
+
   async setCountry(country: string) {
     const res = this.miService.setCountry(country)
     this.user$.next({ ...this.user$.value!, country })

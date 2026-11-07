@@ -176,6 +176,16 @@ impl Default for Session {
     }
 }
 
+/// 可持久化的登录凭证快照；不包含密码
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SessionSnapshot {
+    pub username: String,
+    pub user_id: String,
+    pub service_token: String,
+    pub ssecurity: String,
+    pub country: String,
+}
+
 pub struct MiCloudProtocol {
     urls: UrlsConfig,
     session: RwLock<Session>,
@@ -404,6 +414,43 @@ impl MiCloudProtocol {
         country
             .map(|c| c.to_string())
             .unwrap_or_else(|| self.session.read().unwrap().country.clone())
+    }
+
+    pub fn is_logged_in(&self) -> bool {
+        self.session.read().unwrap().service_token.is_some()
+    }
+
+    /// 导出当前登录凭证，未登录时返回 `None`
+    pub fn session_snapshot(&self) -> Option<SessionSnapshot> {
+        let session = self.session.read().unwrap();
+        Some(SessionSnapshot {
+            username: session.username.clone()?,
+            user_id: session.user_id.clone()?,
+            service_token: session.service_token.clone()?,
+            ssecurity: session.ssecurity.clone()?,
+            country: session.country.clone(),
+        })
+    }
+
+    /// 用持久化凭证恢复登录状态；不发起网络校验
+    pub fn restore_session(&self, snapshot: SessionSnapshot) {
+        let country = if self.is_country_supported(&snapshot.country) {
+            snapshot.country
+        } else {
+            "cn".to_string()
+        };
+        let mut session = self.session.write().unwrap();
+        session.username = Some(snapshot.username);
+        session.password_md5 = None;
+        session.ssecurity = Some(snapshot.ssecurity);
+        session.user_id = Some(snapshot.user_id);
+        session.service_token = Some(snapshot.service_token);
+        session.country = country;
+    }
+
+    /// 清除内存中的登录状态
+    pub fn clear_session(&self) {
+        *self.session.write().unwrap() = Session::default();
     }
 
     pub async fn get_devices<'a>(
