@@ -12,6 +12,8 @@ extern crate urlencoding;
 
 use ::hmac::{Hmac, Mac};
 use anyhow::{anyhow, Context, Result};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use crypto_hash::{hex_digest, Algorithm};
 use hmac::NewMac;
 use log::debug;
@@ -26,7 +28,7 @@ use serde_json::{json, Number, Value};
 use sha2::{Digest, Sha256};
 use std::{
     iter,
-    sync::Arc,
+    sync::{Arc, OnceLock, RwLock},
     time::{SystemTime, UNIX_EPOCH},
     vec,
 };
@@ -148,20 +150,42 @@ impl UrlsConfig {
     }
 }
 
-pub struct MiCloudProtocol {
-    urls: UrlsConfig,
+/// 登录会话状态。
+///
+/// 放在 `RwLock` 中是为了在登录流程等待验证码/二步验证时，其他任务（如前端回调）
+/// 仍能通过共享引用访问 `MiCloudProtocol`，避免整体要求 `&mut self`。
+struct Session {
     username: Option<String>,
     password_md5: Option<String>,
     ssecurity: Option<String>,
     user_id: Option<String>,
-    country: String,
     service_token: Option<String>,
+    country: String,
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        Self {
+            username: None,
+            password_md5: None,
+            ssecurity: None,
+            user_id: None,
+            service_token: None,
+            country: "cn".to_string(),
+        }
+    }
+}
+
+pub struct MiCloudProtocol {
+    urls: UrlsConfig,
+    session: RwLock<Session>,
     user_agent: String,
     client_id: String,
     locale: &'static str,
-    captcha_handler: Option<Box<dyn Fn(String) + Send + Sync>>,
+    // 回调只在启动时注册一次，因此使用 OnceLock
+    captcha_handler: OnceLock<Box<dyn Fn(String) + Send + Sync>>,
     captcha_state: AsyncChallengeState<String>,
-    two_factor_handler: Option<Box<dyn Fn(String, String) + Send + Sync>>,
+    two_factor_handler: OnceLock<Box<dyn Fn(String, String) + Send + Sync>>,
     two_factor_state: AsyncChallengeState<String>,
 }
 
@@ -185,6 +209,8 @@ struct DeviceListResponse {
     list: Vec<Device>,
 }
 
+// Mi Cloud 返回的设备 JSON 使用驼峰字段名，保持原名以便直接反序列化并透传给前端
+#[allow(non_snake_case)]
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Device {
     adminFlag: Number,
@@ -241,21 +267,16 @@ impl MiCloudProtocol {
                 login_step1: "https://account.xiaomi.com/pass/serviceLogin".to_string(),
                 login_step2: "https://account.xiaomi.com/pass/serviceLoginAuth2".to_string(),
             },
-            username: None,
-            password_md5: None,
-            ssecurity: None,
-            country: "cn".to_string(),
-            user_id: None,
-            service_token: None,
+            session: RwLock::new(Session::default()),
             user_agent: format!(
                 "Android-7.1.1-1.0.0-ONEPLUS A3010-136-{} APP/xiaomi.smarthome APPV/62830",
                 agent_id.clone()
             ),
             client_id,
             locale: "en",
-            captcha_handler: None,
+            captcha_handler: OnceLock::new(),
             captcha_state: AsyncChallengeState::<String>::new(),
-            two_factor_handler: None,
+            two_factor_handler: OnceLock::new(),
             two_factor_state: AsyncChallengeState::<String>::new(),
         }
     }
@@ -281,12 +302,12 @@ impl MiCloudProtocol {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use mi_cloud_protocol::MiCloudProtocol;
+    /// ```no_run
+    /// use miio::MiCloudProtocol;
     ///
-    /// #[tokio::main]
+    /// #[tokio::main(flavor = "current_thread")]
     /// async fn main() {
-    ///     let mut mi_cloud = MiCloudProtocol::new();
+    ///     let mi_cloud = MiCloudProtocol::new();
     ///     mi_cloud.login("my_username", "my_password").await.unwrap();
     /// }
     /// ```
@@ -294,7 +315,7 @@ impl MiCloudProtocol {
     /// # Errors
     ///
     /// Returns `Err` if authentication fails.
-    pub async fn login(&mut self, username: &str, password: &str) -> Result<()> {
+    pub async fn login(&self, username: &str, password: &str) -> Result<()> {
         let jar = Arc::new(Jar::default());
         let url = "https://account.xiaomi.com".parse::<Url>().unwrap();
         jar.add_cookie_str(
@@ -325,11 +346,7 @@ impl MiCloudProtocol {
                 location,
             } => {
                 let token = self.login_step3(&client, location).await?;
-                self.username = Some(username.to_string());
-                self.password_md5 = Some(password_md5);
-                self.ssecurity = Some(ssecurity);
-                self.user_id = Some(user_id.to_string());
-                self.service_token = Some(token);
+                self.store_session(username, &password_md5, ssecurity, user_id, token);
                 return Ok(());
             }
             LoginStep2Result::TwoFactorRequired { notification_url } => {
@@ -346,16 +363,29 @@ impl MiCloudProtocol {
                         user_id,
                         service_token,
                     } => {
-                        self.username = Some(username.to_string());
-                        self.password_md5 = Some(password_md5);
-                        self.ssecurity = Some(ssecurity);
-                        self.user_id = Some(user_id.to_string());
-                        self.service_token = Some(service_token);
+                        self.store_session(username, &password_md5, ssecurity, user_id, service_token);
                         return Ok(());
                     }
                 }
             }
         }
+    }
+
+    /// 登录成功后写入会话状态，country 保留 `set_country` 设置的值
+    fn store_session(
+        &self,
+        username: &str,
+        password_md5: &str,
+        ssecurity: String,
+        user_id: i64,
+        service_token: String,
+    ) {
+        let mut session = self.session.write().unwrap();
+        session.username = Some(username.to_string());
+        session.password_md5 = Some(password_md5.to_string());
+        session.ssecurity = Some(ssecurity);
+        session.user_id = Some(user_id.to_string());
+        session.service_token = Some(service_token);
     }
 
     pub fn is_country_supported(&self, country: &str) -> bool {
@@ -364,10 +394,16 @@ impl MiCloudProtocol {
             .any(|x| x[0] == country)
     }
 
-    pub fn set_country(&mut self, country: &str) {
+    pub fn set_country(&self, country: &str) {
         if self.is_country_supported(country) {
-            self.country = country.to_string();
+            self.session.write().unwrap().country = country.to_string();
         }
+    }
+
+    fn country_or_default(&self, country: Option<&str>) -> String {
+        country
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| self.session.read().unwrap().country.clone())
     }
 
     pub async fn get_devices<'a>(
@@ -381,9 +417,9 @@ impl MiCloudProtocol {
             json!({ "getVirtualModel": false, "getHuamiDevices": 0 })
         };
 
-        let country = country.unwrap_or(self.country.as_str());
+        let country = self.country_or_default(country);
         let res = self
-            .request("/home/device_list", req, country)
+            .request("/home/device_list", req, &country)
             .await
             .map_err(|e| anyhow!(e))?;
 
@@ -420,10 +456,10 @@ impl MiCloudProtocol {
     ) -> Result<Value> {
         let req = json!({ "method": method, "params": params });
 
-        let country = country.unwrap_or(self.country.as_str());
+        let country = self.country_or_default(country);
         let fallback_msg = format!("Miio call for device {} failed", device_id);
         let res = self
-            .request(&format!(r"/home/rpc/{}", device_id), req, country)
+            .request(&format!(r"/home/rpc/{}", device_id), req, &country)
             .await
             .with_context(|| fallback_msg.to_string())?;
 
@@ -440,12 +476,12 @@ impl MiCloudProtocol {
         self.urls = urls;
     }
 
-    pub fn _set_captcha_handler(&mut self, handler: Box<dyn Fn(String) + Send + Sync>) {
-        self.captcha_handler = Some(handler);
+    pub fn _set_captcha_handler(&self, handler: Box<dyn Fn(String) + Send + Sync>) {
+        let _ = self.captcha_handler.set(handler);
     }
 
-    pub fn _set_two_factor_handler(&mut self, handler: Box<dyn Fn(String, String) + Send + Sync>) {
-        self.two_factor_handler = Some(handler);
+    pub fn _set_two_factor_handler(&self, handler: Box<dyn Fn(String, String) + Send + Sync>) {
+        let _ = self.two_factor_handler.set(handler);
     }
 
     async fn fetch_captcha_b64_data_url(&self, client: &Client, path: &str) -> Result<String> {
@@ -653,7 +689,7 @@ impl MiCloudProtocol {
     }
 
     async fn request_captcha_solve(&self, captcha_b64_data_url: String) -> Result<String> {
-        if let Some(handler) = &self.captcha_handler {
+        if let Some(handler) = self.captcha_handler.get() {
             let result = self
                 .captcha_state
                 .request_solve(captcha_b64_data_url.clone(), |url| async move {
@@ -789,7 +825,7 @@ impl MiCloudProtocol {
         // Step 6: Loop to get and verify the code from the user.
         let mut error_message = "";
         loop {
-            let code = if let Some(handler) = &self.two_factor_handler {
+            let code = if let Some(handler) = self.two_factor_handler.get() {
                 match self
                     .two_factor_state
                     .request_solve(flag.to_string(), |flag| async move {
@@ -1001,7 +1037,16 @@ impl MiCloudProtocol {
     ) -> Result<serde_json::Value> {
         let client = Client::new();
 
-        if self.service_token.is_none() {
+        let (user_id, service_token, ssecurity) = {
+            let session = self.session.read().unwrap();
+            (
+                session.user_id.clone(),
+                session.service_token.clone(),
+                session.ssecurity.clone(),
+            )
+        };
+
+        if service_token.is_none() {
             return Err(anyhow!("Request error: Not logged in"));
         }
 
@@ -1015,7 +1060,7 @@ impl MiCloudProtocol {
         let params = json!({"data": data});
         let url = format!("{}{}", self.get_api_url(country), path);
         let nonce = self.generate_nonce();
-        let signed_nonce = self.signed_nonce(self.ssecurity.as_ref().unwrap(), &nonce);
+        let signed_nonce = self.signed_nonce(ssecurity.as_ref().unwrap(), &nonce);
         let signature = self.generate_signature(path, &signed_nonce, &nonce, &params);
         let body = json!({
             "_nonce": nonce,
@@ -1031,7 +1076,7 @@ impl MiCloudProtocol {
             .header("x-xiaomi-protocal-flag-cli", "PROTOCAL-HTTP2")
             .header("mishop-client-id", "180100041079")
             .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .header(header::COOKIE, self.get_cookie())
+            .header(header::COOKIE, self.get_cookie(&user_id, &service_token))
             .body(body_as_query_string)
             .send()
             .await
@@ -1059,17 +1104,21 @@ impl MiCloudProtocol {
             / 60;
         hex::decode_to_slice(random_hex, &mut buf[0..8]).expect("Decoding failed");
         buf[8..].copy_from_slice(&timestamp.to_be_bytes());
-        base64::encode(buf)
+        STANDARD.encode(buf)
     }
 
     fn signed_nonce(&self, secret: &str, nonce: &str) -> String {
-        let secret_bytes = base64::decode(secret).expect("Failed to decode secret from base64");
-        let nonce_bytes = base64::decode(nonce).expect("Failed to decode nonce from base64");
+        let secret_bytes = STANDARD
+            .decode(secret)
+            .expect("Failed to decode secret from base64");
+        let nonce_bytes = STANDARD
+            .decode(nonce)
+            .expect("Failed to decode nonce from base64");
         let mut hasher = Sha256::new();
         hasher.update(&secret_bytes);
         hasher.update(&nonce_bytes);
         let hash_result = hasher.finalize();
-        base64::encode(hash_result)
+        STANDARD.encode(hash_result)
     }
 
     fn generate_signature(
@@ -1100,11 +1149,11 @@ impl MiCloudProtocol {
         }
         let exps_str = exps.join("&");
 
-        let key = base64::decode(signed_nonce).unwrap();
+        let key = STANDARD.decode(signed_nonce).unwrap();
         let mut signing_key = Hmac::<Sha256>::new_varkey(&key).unwrap();
         signing_key.update(exps_str.as_bytes());
         let result = signing_key.finalize().into_bytes();
-        base64::encode(result)
+        STANDARD.encode(result)
     }
 
     fn get_api_url(&self, country: &str) -> String {
@@ -1114,15 +1163,15 @@ impl MiCloudProtocol {
         }
     }
 
-    fn get_cookie(&self) -> String {
+    fn get_cookie(&self, user_id: &Option<String>, service_token: &Option<String>) -> String {
         let mut cookies: Vec<String> = vec![];
 
         cookies.push("sdkVersion=accountsdk-18.8.15".to_string());
         cookies.push(format!("deviceId={}", self.client_id));
-        if let Some(user_id) = &self.user_id.as_ref() {
+        if let Some(user_id) = user_id {
             cookies.push(format!("userId={}", user_id));
         }
-        if let Some(token) = &self.service_token.as_ref() {
+        if let Some(token) = service_token {
             cookies.push(format!("serviceToken={}", token));
             cookies.push(format!("yetAnotherServiceToken={}", token));
         }
@@ -1204,6 +1253,7 @@ mod tests {
     }
 
     // #[tokio::test]
+    #[allow(dead_code)]
     async fn e2e() {
         let mut mi: MiCloudProtocol = MiCloudProtocol::new();
         mi._override_urls(UrlsConfig {
