@@ -1,40 +1,68 @@
 name: Release (Windows portable)
 
-# 推送 v* 标签时自动构建并发布；也可以在 Actions 页面手动运行。
-# 版本号唯一来源是 package.json，标签必须与之对应（如版本 1.5.0 → v1.5.0）。
+# 触发方式：
+#   1. 向 dev 分支推送改动 package.json 的提交，且其中的 version 尚未发布
+#      → 自动构建，并创建对应的 vX.Y.Z 标签和 Release（标签由工作流生成，无需手动打标签）
+#   2. 手动运行（Actions → Release → Run workflow），可勾选 force 覆盖同名 Release
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - dev
+    paths:
+      - 'package.json'
   workflow_dispatch:
+    inputs:
+      force:
+        description: '强制重新构建并覆盖同名 Release'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: windows-latest
-
+  # 先判断当前 package.json 的版本是否已经发布，避免每次改动 package.json 都重复构建
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      skip: ${{ steps.exists.outputs.skip }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Read version from package.json
         id: version
-        shell: pwsh
-        run: |
-          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
-          "value=$($pkg.version)" >> $env:GITHUB_OUTPUT
+        run: echo "value=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
 
-      - name: Verify tag matches version
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: pwsh
+      - name: Check whether this version is already released
+        id: exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ inputs.force }}
         run: |
-          $expected = "v${{ steps.version.outputs.value }}"
-          if ("${{ github.ref_name }}" -ne $expected) {
-            Write-Error "标签 '${{ github.ref_name }}' 与 package.json 版本不匹配，应为 '$expected'"
-            exit 1
-          }
+          tag="v${{ steps.version.outputs.value }}"
+          if [ "$FORCE" = "true" ]; then
+            echo "force 已勾选，跳过已发布检查"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if gh api "repos/${{ github.repository }}/releases/tags/$tag" > /dev/null 2>&1; then
+            echo "$tag 已存在，跳过本次发布"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$tag 尚未发布，开始构建"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    needs: check
+    if: needs.check.outputs.skip == 'false'
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -67,7 +95,7 @@ jobs:
       - name: Package portable zip
         shell: pwsh
         run: |
-          $version = "${{ steps.version.outputs.value }}"
+          $version = "${{ needs.check.outputs.version }}"
           $exe = "src-tauri/target/release/mi-home-toolkit.exe"
           if (!(Test-Path $exe)) {
             Write-Error "未找到构建产物：$exe"
@@ -86,7 +114,7 @@ jobs:
       - name: Compose release notes
         shell: pwsh
         run: |
-          $version = "${{ steps.version.outputs.value }}"
+          $version = "${{ needs.check.outputs.version }}"
           $header = "## Mi Home Toolkit v$version`r`n`r`n"
           $notes = Get-Content doc/RELEASE_NOTES.md -Raw
           $path = Join-Path $env:RUNNER_TEMP 'release-body.md'
@@ -94,9 +122,12 @@ jobs:
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{ steps.version.outputs.value }}
-          name: v${{ steps.version.outputs.value }}
+          tag_name: v${{ needs.check.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: v${{ needs.check.outputs.version }}
           body_path: ${{ runner.temp }}/release-body.md
           draft: false
           files: artifacts/*.zip
