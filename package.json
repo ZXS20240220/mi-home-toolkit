@@ -6,7 +6,8 @@
     "start": "ng serve",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "version:sync": "node scripts/sync-version.mjs"
   },
   "engines": {
     "node": ">=18.19.1",

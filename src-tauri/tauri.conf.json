@@ -1,11 +1,11 @@
 {
   "productName": "Mi Home Toolkit",
-  "version": "1.4.2",
+  "version": "../package.json",
   "identifier": "com.mi-home-toolkit",
   "build": {
     "beforeDevCommand": "pnpm start",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm version:sync && pnpm build",
     "frontendDist": "../dist/mi-home-toolkit/browser"
   },
   "app": {

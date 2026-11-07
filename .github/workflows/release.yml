@@ -1,71 +1,102 @@
-name: Release
+name: Release (Windows portable)
+
+# 推送 v* 标签时自动构建并发布；也可以在 Actions 页面手动运行。
+# 版本号唯一来源是 package.json，标签必须与之对应（如版本 1.5.0 → v1.5.0）。
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   release:
-    permissions:
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # macOS ARM
-          - platform: 'macos-latest'
-            args: '--target aarch64-apple-darwin'
-            target: ''
+    runs-on: windows-latest
 
-          # macOS Intel
-          - platform: 'macos-latest'
-            args: '--target x86_64-apple-darwin'
-            target: x86_64-apple-darwin
-
-          - platform: 'ubuntu-22.04'
-            args: ''
-            target: ''
-
-          - platform: 'windows-latest'
-            args: ''
-            target: ''
-
-    runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Read version from package.json
+        id: version
+        shell: pwsh
+        run: |
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          "value=$($pkg.version)" >> $env:GITHUB_OUTPUT
+
+      - name: Verify tag matches version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $expected = "v${{ steps.version.outputs.value }}"
+          if ("${{ github.ref_name }}" -ne $expected) {
+            Write-Error "标签 '${{ github.ref_name }}' 与 package.json 版本不匹配，应为 '$expected'"
+            exit 1
+          }
+
       - name: Setup pnpm
-        uses: pnpm/action-setup@v2
+        uses: pnpm/action-setup@v4
         with:
           version: 9
 
-      - name: Node.js setup
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'pnpm'
 
-      - name: Rust setup
+      - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target || '' }}
 
-      - name: Install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Sync version to Cargo.toml
+        run: node scripts/sync-version.mjs
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build portable executable
+        run: pnpm tauri build --no-bundle
+
+      - name: Package portable zip
+        shell: pwsh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          $version = "${{ steps.version.outputs.value }}"
+          $exe = "src-tauri/target/release/mi-home-toolkit.exe"
+          if (!(Test-Path $exe)) {
+            Write-Error "未找到构建产物：$exe"
+            exit 1
+          }
 
-      - run: pnpm install
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+          Copy-Item $exe staging/
+          Copy-Item doc/RELEASE_NOTES.md staging/README.md
 
-      - name: Build and release
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          $zip = "artifacts/MiHomeToolkit-$version-windows-x64-portable.zip"
+          Compress-Archive -Path staging/* -DestinationPath $zip -Force
+          Get-Item $zip | Select-Object Name, Length
+
+      - name: Compose release notes
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.value }}"
+          $header = "## Mi Home Toolkit v$version`r`n`r`n"
+          $notes = Get-Content doc/RELEASE_NOTES.md -Raw
+          $path = Join-Path $env:RUNNER_TEMP 'release-body.md'
+          Set-Content -Path $path -Value ($header + $notes) -Encoding utf8
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
         with:
-          tagName: v__VERSION__
-          releaseName: v__VERSION__
-          releaseDraft: true
-          args: ${{ matrix.args }}
+          tag_name: v${{ steps.version.outputs.value }}
+          name: v${{ steps.version.outputs.value }}
+          body_path: ${{ runner.temp }}/release-body.md
+          draft: false
+          files: artifacts/*.zip
