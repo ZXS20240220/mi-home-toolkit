@@ -18,6 +18,7 @@ import {
 } from '../../lamp15.service'
 
 type Channel =
+  | 'dev-power'
   | 'main-power'
   | 'main-bright'
   | 'main-ct'
@@ -79,6 +80,18 @@ type Channel =
           </button>
         </div>
       }
+
+      <div class="mb-4 flex items-center gap-3">
+        <button
+          type="button"
+          class="btn btn-sm btn-outline"
+          (click)="toggleAll()"
+          [disabled]="!device()?.isOnline"
+        >
+          Toggle all lights
+        </button>
+        <span class="text-xs opacity-60">Main light + background together</span>
+      </div>
 
       <div class="flex flex-col gap-4">
         <section class="flex flex-col gap-2">
@@ -449,6 +462,13 @@ export class Lamp15ControlDialogComponent {
         throw err
       }
     })
+  }
+
+  /** 整体开关：调用的 dev_toggle 由设备自行决定目标状态，执行后回读真实状态 */
+  toggleAll() {
+    const did = this.did()
+    if (!did) return
+    this.submit('dev-power', () => this.lamp.toggleAll(did))
   }
 
   setMainBrightness() {

@@ -190,6 +190,11 @@ export class Lamp15Service {
     return this.call(did, 'set_power', [on ? 'on' : 'off', 'smooth', 300])
   }
 
+  /** 同时切换主灯与背景灯，切换后的目标状态由设备决定 */
+  toggleAll(did: string) {
+    return this.call(did, 'dev_toggle')
+  }
+
   setMainBrightness(did: string, value: number) {
     return this.call(did, 'set_bright', [clamp(value, 1, 100), 'smooth', 300])
   }
