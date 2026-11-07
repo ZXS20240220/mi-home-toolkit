@@ -8,3 +8,4 @@ export type Icon =
   | 'login'
   | 'logout'
   | 'terminal'
+  | 'bulb'

@@ -15,6 +15,7 @@ import { IconComponent } from '../icon/icon.component'
 import { MiService } from '../mi.service'
 import { FormsModule } from '@angular/forms'
 import { injectQuery } from '@tanstack/angular-query-experimental'
+import { LAMP15_MODEL } from '../lamp15.service'
 
 @Component({
   selector: 'app-device',
@@ -62,6 +63,16 @@ import { injectQuery } from '@tanstack/angular-query-experimental'
                 <app-icon class="w-5 h-5" icon="terminal" />
               </button>
             </div>
+
+            <div class="tooltip self-start" data-tip="Light control">
+              <button
+                *ngIf="lamp15Available()"
+                (click)="lampControl.emit()"
+                class="btn btn-sm btn-circle btn-outline"
+              >
+                <app-icon class="w-5 h-5" icon="bulb" />
+              </button>
+            </div>
           </h2>
           <p>ID: {{ device.did }}</p>
           <p>IP: {{ device.localip }}</p>
@@ -102,6 +113,7 @@ export class DeviceComponent {
   miService = inject(MiService)
 
   executeCommand = output()
+  lampControl = output()
 
   device = input.required<Device>()
   deviceQuery = injectQuery(() => {
@@ -127,6 +139,12 @@ export class DeviceComponent {
 
   deviceImage = computed(() =>
     deviceToImageMap.get(this.deviceComputed().model)
+  )
+
+  lamp15Available = computed(
+    () =>
+      this.deviceComputed().isOnline &&
+      this.deviceComputed().model === LAMP15_MODEL
   )
 
   lanMode = signal(false)

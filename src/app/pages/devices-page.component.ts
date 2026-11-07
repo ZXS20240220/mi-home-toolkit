@@ -14,6 +14,7 @@ import { AuthService } from '../auth.service'
 import { SetCountryDialogComponent } from '../dialogs/set-country-dialog/set-country-dialog.component'
 import { injectQuery } from '@tanstack/angular-query-experimental'
 import { ExecuteCommandDialogComponent } from '../dialogs/execute-command-dialog/execute-command-dialog.component'
+import { Lamp15ControlDialogComponent } from '../dialogs/lamp15-control-dialog/lamp15-control-dialog.component'
 import { Device } from '../types'
 
 @Component({
@@ -56,6 +57,7 @@ import { Device } from '../types'
           class="mb-2"
           [device]="device"
           (executeCommand)="executeCommandForDevice.set(device)"
+          (lampControl)="lampControlForDevice.set(device)"
         ></app-device>
       } @empty {
         <div class="text-center text-gray-500">
@@ -85,6 +87,8 @@ import { Device } from '../types'
       [(device)]="executeCommandForDevice"
       (success)="invalidateDevice()"
     />
+
+    <app-lamp15-control-dialog [(device)]="lampControlForDevice" />
   `,
   styles: [``],
   imports: [
@@ -93,10 +97,12 @@ import { Device } from '../types'
     IconComponent,
     SetCountryDialogComponent,
     ExecuteCommandDialogComponent,
+    Lamp15ControlDialogComponent,
   ],
 })
 export class DevicesPageComponent {
   executeCommandForDevice = signal<Device | null>(null)
+  lampControlForDevice = signal<Device | null>(null)
   changeCountryDialogVisible = signal(false)
   loggingOut = signal(false)
 
