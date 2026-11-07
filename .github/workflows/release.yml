@@ -20,6 +20,11 @@ on:
 permissions:
   contents: write
 
+# 同一分支的连续推送串行执行，避免两个 release job 互相覆盖
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # 先判断当前 package.json 的版本是否已经发布，避免每次改动 package.json 都重复构建
   check:
@@ -67,7 +72,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 12
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -130,4 +135,5 @@ jobs:
           name: v${{ needs.check.outputs.version }}
           body_path: ${{ runner.temp }}/release-body.md
           draft: false
+          overwrite_files: true
           files: artifacts/*.zip

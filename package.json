@@ -1,6 +1,7 @@
 {
   "name": "mi-home-toolkit",
   "version": "1.5.0",
+  "packageManager": "pnpm@12.18.0",
   "scripts": {
     "ng": "ng",
     "start": "ng serve",
