@@ -50,6 +50,41 @@ export function rgbIntToHex(rgb: number) {
   return `#${(rgb & 0xffffff).toString(16).padStart(6, '0')}`
 }
 
+/**
+ * Yeelight 的命令成功时通常返回 `["ok"]`。固件拒绝执行时可能返回
+ * `["error"]`、带错误码的对象或纯字符串错误信息。
+ * 这里统一检查结果，避免把设备端失败当成成功、UI 静默回弹。
+ */
+export function assertCommandOk(result: unknown) {
+  if (result == null || result === '') {
+    throw new Error('设备没有返回执行结果')
+  }
+
+  if (typeof result === 'string') {
+    if (result.toLowerCase() === 'ok') return
+    throw new Error(`设备返回：${result}`)
+  }
+
+  if (Array.isArray(result)) {
+    const failed = result.find(
+      (item) => typeof item === 'string' && item.toLowerCase().includes('error')
+    )
+    if (failed) {
+      throw new Error('设备拒绝了该命令，可能不支持此方法或参数')
+    }
+    return
+  }
+
+  if (typeof result === 'object') {
+    const { code, message } = result as { code?: unknown; message?: unknown }
+    if (code != null && Number(code) !== 0) {
+      throw new Error(
+        `设备返回错误码 ${String(code)}${message ? `：${String(message)}` : ''}`
+      )
+    }
+  }
+}
+
 export function hexToRgbInt(hex: string) {
   const normalized = hex.replace('#', '')
   const value = Number.parseInt(normalized, 16)
@@ -117,13 +152,21 @@ export class Lamp15Service {
   private mi = inject(MiService)
 
   private call(did: string, method: string, params: unknown[] = []) {
-    return this.mi.callDevice({ did, method, params: JSON.stringify(params) })
+    return this.mi
+      .callDevice({ did, method, params: JSON.stringify(params) })
+      .then((result) => {
+        assertCommandOk(result)
+        return result
+      })
   }
 
   getState(did: string) {
-    return this.mi
-      .getProp({ did, name: LAMP15_PROPS })
-      .then((raw) => parseLamp15State(raw))
+    return this.mi.getProp({ did, name: LAMP15_PROPS }).then((raw) => {
+      if (!Array.isArray(raw) || raw.length < 8) {
+        throw new Error(`读取灯光状态失败，设备返回：${JSON.stringify(raw)}`)
+      }
+      return parseLamp15State(raw)
+    })
   }
 
   /**

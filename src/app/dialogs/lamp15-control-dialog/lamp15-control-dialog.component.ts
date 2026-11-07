@@ -309,6 +309,8 @@ export class Lamp15ControlDialogComponent {
    * 避免拖动过程中堆积大量 RPC 请求。
    */
   private pending = new Map<Channel, () => Promise<unknown>>()
+  /** 电源开关的目标状态，用于在命令结束后核对设备是否真正执行 */
+  private expectedPower = new Map<Channel, boolean>()
   private draining = false
   private drainPromise: Promise<void> | null = null
 
@@ -388,9 +390,36 @@ export class Lamp15ControlDialogComponent {
         }
       }
       await this.loadState()
+      this.verifyPowerApplied()
     } finally {
       this.draining = false
       this.busy.set(false)
+    }
+  }
+
+  /**
+   * 设备可能对命令返回 `ok` 却不真正执行（例如背景灯供电异常时）。
+   * 这里核对开关状态是否与用户请求一致，不一致就明确报错，而不是静默回弹。
+   */
+  private verifyPowerApplied() {
+    if (this.error()) return
+
+    const failures: string[] = []
+    const main = this.expectedPower.get('main-power')
+    if (main != null && this.power() !== main) {
+      failures.push(`主灯未能${main ? '开启' : '关闭'}`)
+    }
+    const background = this.expectedPower.get('bg-power')
+    if (background != null && this.backgroundPower() !== background) {
+      failures.push(`背景灯未能${background ? '开启' : '关闭'}`)
+    }
+    this.expectedPower.clear()
+
+    if (failures.length) {
+      this.error.set(
+        `设备返回成功，但状态没有改变：${failures.join('；')}。` +
+          '请检查设备供电、固件版本，或改用米家 App 验证。'
+      )
     }
   }
 
@@ -410,10 +439,12 @@ export class Lamp15ControlDialogComponent {
     const previous = this.power()
     const target = !previous
     this.power.set(target)
+    this.expectedPower.set('main-power', target)
     this.submit('main-power', async () => {
       try {
         await this.lamp.setMainPower(did, target)
       } catch (err) {
+        this.expectedPower.delete('main-power')
         this.power.set(previous)
         throw err
       }
@@ -440,10 +471,12 @@ export class Lamp15ControlDialogComponent {
     const previous = this.backgroundPower()
     const target = !previous
     this.backgroundPower.set(target)
+    this.expectedPower.set('bg-power', target)
     this.submit('bg-power', async () => {
       try {
         await this.lamp.setBackgroundPower(did, target)
       } catch (err) {
+        this.expectedPower.delete('bg-power')
         this.backgroundPower.set(previous)
         throw err
       }
