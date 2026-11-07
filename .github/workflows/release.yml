@@ -1,15 +1,10 @@
 name: Release (Windows portable)
 
-# 触发方式：
-#   1. 向 dev 分支推送改动 package.json 的提交，且其中的 version 尚未发布
-#      → 自动构建，并创建对应的 vX.Y.Z 标签和 Release（标签由工作流生成，无需手动打标签）
-#   2. 手动运行（Actions → Release → Run workflow），可勾选 force 覆盖同名 Release
+# 仅手动触发：推送代码不会运行本工作流。
+# 发布方式：Actions → Release (Windows portable) → Run workflow
+#   - 版本号取自 package.json，标签 vX.Y.Z 由工作流自动创建，无需手动打标签
+#   - 若该版本已发布则跳过；勾选 force 可强制重建并覆盖同名 Release
 on:
-  push:
-    branches:
-      - dev
-    paths:
-      - 'package.json'
   workflow_dispatch:
     inputs:
       force:
@@ -20,7 +15,7 @@ on:
 permissions:
   contents: write
 
-# 同一分支的连续推送串行执行，避免两个 release job 互相覆盖
+# 连续手动运行串行执行，避免两个 release job 互相覆盖
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
