@@ -9,6 +9,7 @@ import {
 } from '@angular/core'
 import { Device } from '../../types'
 import { DialogDirective } from '../dialog.directive'
+import { IconComponent } from '../../icon/icon.component'
 import {
   Lamp15Service,
   hexToHsv,
@@ -37,12 +38,30 @@ type Channel =
         ✕
       </button>
 
-      <h3 class="font-bold text-lg mb-4 flex items-center gap-2">
-        {{ device()?.name }} - Light control
-        @if (loading() || busy()) {
+      <div class="mb-4 flex items-center gap-2 pr-10">
+        <h3 class="font-bold text-lg">
+          {{ device()?.name }} - Light control
+        </h3>
+
+        <div class="tooltip tooltip-bottom" data-tip="Refresh state">
+          <button
+            type="button"
+            class="btn btn-sm btn-circle btn-outline"
+            (click)="refresh()"
+            [disabled]="loading()"
+          >
+            @if (loading()) {
+              <span class="loading loading-spinner loading-xs"></span>
+            } @else {
+              <app-icon class="w-4 h-4" icon="refresh" />
+            }
+          </button>
+        </div>
+
+        @if (busy()) {
           <span class="loading loading-spinner loading-sm"></span>
         }
-      </h3>
+      </div>
 
       @if (!device()?.isOnline) {
         <div class="alert alert-warning mb-3">Device is offline.</div>
@@ -259,7 +278,7 @@ type Channel =
     </div>
   </dialog>`,
   styles: [``],
-  imports: [DialogDirective],
+  imports: [DialogDirective, IconComponent],
 })
 export class Lamp15ControlDialogComponent {
   private lamp = inject(Lamp15Service)
@@ -291,6 +310,7 @@ export class Lamp15ControlDialogComponent {
    */
   private pending = new Map<Channel, () => Promise<unknown>>()
   private draining = false
+  private drainPromise: Promise<void> | null = null
 
   private visibleEffect = effect(() => {
     if (!this.visible()) return
@@ -302,8 +322,15 @@ export class Lamp15ControlDialogComponent {
   })
 
   retry() {
+    void this.refresh()
+  }
+
+  /** 手动刷新设备状态；有未完成命令时先等队列结束，避免读到中间值 */
+  async refresh() {
+    if (this.loading()) return
     this.error.set(null)
-    void this.loadState(true)
+    await this.drainPromise?.catch(() => undefined)
+    await this.loadState(true)
   }
 
   /** 打开面板或命令成功后读取设备真实状态 */
@@ -337,7 +364,9 @@ export class Lamp15ControlDialogComponent {
   private submit(channel: Channel, action: () => Promise<unknown>) {
     this.error.set(null)
     this.pending.set(channel, action)
-    void this.drain()
+    this.drainPromise ??= this.drain().finally(() => {
+      this.drainPromise = null
+    })
   }
 
   private async drain() {
