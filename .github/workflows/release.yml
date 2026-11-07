@@ -64,10 +64,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # pnpm 版本唯一来源：package.json 的 packageManager 字段（pnpm@12.18.0）
+      # action-setup 会自动读取该字段，不能再传 version，否则报版本冲突
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 12
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
