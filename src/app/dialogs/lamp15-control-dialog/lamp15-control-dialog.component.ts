@@ -222,18 +222,24 @@ type Channel =
             </div>
 
             <label class="label py-0">Hue {{ hue() }}°</label>
-            <input
-              type="range"
-              class="range"
-              min="0"
-              max="359"
-              step="1"
-              [value]="hue()"
-              (input)="onHsvInput('hue', +$any($event.target).value)"
-              (change)="setBackgroundHsv()"
-              [disabled]="!device()?.isOnline"
-              style="background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);"
-            />
+            <div class="relative flex w-full items-center">
+              <div
+                class="pointer-events-none absolute inset-x-0 top-1/2 h-3 -translate-y-1/2 rounded-full"
+                style="background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);"
+              ></div>
+              <input
+                type="range"
+                class="range relative w-full"
+                style="--range-progress: transparent; --range-bg: transparent;"
+                min="0"
+                max="359"
+                step="1"
+                [value]="hue()"
+                (input)="onHsvInput('hue', +$any($event.target).value)"
+                (change)="setBackgroundHsv()"
+                [disabled]="!device()?.isOnline"
+              />
+            </div>
 
             <label class="label py-0">Saturation {{ saturation() }}%</label>
             <input
