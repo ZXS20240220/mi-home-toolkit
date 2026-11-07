@@ -56,6 +56,62 @@ export function hexToRgbInt(hex: string) {
   return Number.isFinite(value) ? value : 0xffffff
 }
 
+/** HSV 转 #rrggbb，用于在 UI 中预览色相/饱和度控件的结果 */
+export function hsvToHex(hue: number, saturation: number, value = 100) {
+  const h = ((hue % 360) + 360) % 360
+  const s = Math.max(0, Math.min(100, saturation)) / 100
+  const v = Math.max(0, Math.min(100, value)) / 100
+
+  const c = v * s
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1))
+  const m = v - c
+
+  const [r1, g1, b1] =
+    h < 60
+      ? [c, x, 0]
+      : h < 120
+        ? [x, c, 0]
+        : h < 180
+          ? [0, c, x]
+          : h < 240
+            ? [0, x, c]
+            : h < 300
+              ? [x, 0, c]
+              : [c, 0, x]
+
+  const toHex = (v: number) =>
+    Math.round((v + m) * 255)
+      .toString(16)
+      .padStart(2, '0')
+
+  return `#${toHex(r1)}${toHex(g1)}${toHex(b1)}`
+}
+
+/** #rrggbb 转 HSV，用于用户直接选色后同步色相/饱和度滑块 */
+export function hexToHsv(hex: string) {
+  const normalized = hex.replace('#', '')
+  const r = Number.parseInt(normalized.slice(0, 2), 16) / 255
+  const g = Number.parseInt(normalized.slice(2, 4), 16) / 255
+  const b = Number.parseInt(normalized.slice(4, 6), 16) / 255
+  if (![r, g, b].every(Number.isFinite)) return { hue: 0, saturation: 0 }
+
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const delta = max - min
+
+  let hue = 0
+  if (delta !== 0) {
+    if (max === r) hue = 60 * (((g - b) / delta) % 6)
+    else if (max === g) hue = 60 * ((b - r) / delta + 2)
+    else hue = 60 * ((r - g) / delta + 4)
+  }
+
+  return {
+    hue: Math.round((hue + 360) % 360),
+    saturation: Math.round(max === 0 ? 0 : (delta / max) * 100),
+  }
+}
+
 @Injectable({ providedIn: 'root' })
 export class Lamp15Service {
   private mi = inject(MiService)
@@ -68,6 +124,22 @@ export class Lamp15Service {
     return this.mi
       .getProp({ did, name: LAMP15_PROPS })
       .then((raw) => parseLamp15State(raw))
+  }
+
+  /**
+   * 尽力读取背景灯当前模式。`bg_color_mode` 属于未完全验证的扩展属性，
+   * 读取失败或返回非预期值时返回 `null`，由 UI 保留上一次的模式选择。
+   */
+  async getBackgroundMode(did: string): Promise<'ct' | 'color' | null> {
+    try {
+      const raw = await this.mi.getProp({ did, name: ['bg_color_mode'] })
+      const value = Number(Array.isArray(raw) ? raw[0] : raw)
+      if (value === 1 || value === 3) return 'color'
+      if (value === 2) return 'ct'
+      return null
+    } catch {
+      return null
+    }
   }
 
   // 主灯
@@ -102,6 +174,15 @@ export class Lamp15Service {
 
   setBackgroundRgb(did: string, hex: string) {
     return this.call(did, 'bg_set_rgb', [hexToRgbInt(hex), 'smooth', 300])
+  }
+
+  setBackgroundHsv(did: string, hue: number, saturation: number) {
+    return this.call(did, 'bg_set_hsv', [
+      clamp(hue, 0, 359),
+      clamp(saturation, 0, 100),
+      'smooth',
+      300,
+    ])
   }
 }
 

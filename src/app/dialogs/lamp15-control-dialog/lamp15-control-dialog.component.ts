@@ -9,7 +9,21 @@ import {
 } from '@angular/core'
 import { Device } from '../../types'
 import { DialogDirective } from '../dialog.directive'
-import { Lamp15Service, rgbIntToHex } from '../../lamp15.service'
+import {
+  Lamp15Service,
+  hexToHsv,
+  hsvToHex,
+  rgbIntToHex,
+} from '../../lamp15.service'
+
+type Channel =
+  | 'main-power'
+  | 'main-bright'
+  | 'main-ct'
+  | 'bg-power'
+  | 'bg-bright'
+  | 'bg-ct'
+  | 'bg-color'
 
 @Component({
   selector: 'app-lamp15-control-dialog',
@@ -18,25 +32,32 @@ import { Lamp15Service, rgbIntToHex } from '../../lamp15.service'
       <button
         type="button"
         (click)="close()"
-        [disabled]="busy()"
         class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
       >
         ✕
       </button>
 
-      <h3 class="font-bold text-lg mb-4">
+      <h3 class="font-bold text-lg mb-4 flex items-center gap-2">
         {{ device()?.name }} - Light control
-        @if (loading()) {
-          <span class="loading loading-spinner loading-sm ml-2"></span>
+        @if (loading() || busy()) {
+          <span class="loading loading-spinner loading-sm"></span>
         }
       </h3>
 
       @if (!device()?.isOnline) {
         <div class="alert alert-warning mb-3">Device is offline.</div>
       }
-      @if (error()) {
-        <div class="alert alert-error mb-3 whitespace-pre-wrap break-all">
-          {{ error() }}
+      @if (error(); as message) {
+        <div class="alert alert-error mb-3">
+          <div class="flex-1 whitespace-pre-wrap break-all">{{ message }}</div>
+          <button
+            type="button"
+            class="btn btn-sm"
+            (click)="retry()"
+            [disabled]="loading()"
+          >
+            Retry
+          </button>
         </div>
       }
 
@@ -50,7 +71,7 @@ import { Lamp15Service, rgbIntToHex } from '../../lamp15.service'
               class="toggle"
               [checked]="power()"
               (change)="toggleMainPower()"
-              [disabled]="disabled()"
+              [disabled]="!device()?.isOnline"
             />
             <span>{{ power() ? 'On' : 'Off' }}</span>
           </label>
@@ -65,7 +86,7 @@ import { Lamp15Service, rgbIntToHex } from '../../lamp15.service'
             [value]="brightness()"
             (input)="brightness.set(+$any($event.target).value)"
             (change)="setMainBrightness()"
-            [disabled]="disabled()"
+            [disabled]="!device()?.isOnline"
           />
 
           <label class="label py-0">
@@ -80,7 +101,7 @@ import { Lamp15Service, rgbIntToHex } from '../../lamp15.service'
             [value]="colorTemperature()"
             (input)="colorTemperature.set(+$any($event.target).value)"
             (change)="setMainColorTemperature()"
-            [disabled]="disabled()"
+            [disabled]="!device()?.isOnline"
           />
 
           <div class="join">
@@ -88,8 +109,9 @@ import { Lamp15Service, rgbIntToHex } from '../../lamp15.service'
               <button
                 type="button"
                 class="btn btn-sm join-item"
+                [class.btn-active]="colorTemperature() === value"
                 (click)="setMainColorTemperature(value)"
-                [disabled]="disabled()"
+                [disabled]="!device()?.isOnline"
               >
                 {{ value }}K
               </button>
@@ -108,7 +130,7 @@ import { Lamp15Service, rgbIntToHex } from '../../lamp15.service'
               class="toggle"
               [checked]="backgroundPower()"
               (change)="toggleBackgroundPower()"
-              [disabled]="disabled()"
+              [disabled]="!device()?.isOnline"
             />
             <span>{{ backgroundPower() ? 'On' : 'Off' }}</span>
           </label>
@@ -125,7 +147,7 @@ import { Lamp15Service, rgbIntToHex } from '../../lamp15.service'
             [value]="backgroundBrightness()"
             (input)="backgroundBrightness.set(+$any($event.target).value)"
             (change)="setBackgroundBrightness()"
-            [disabled]="disabled()"
+            [disabled]="!device()?.isOnline"
           />
 
           <div class="flex items-center gap-3">
@@ -136,7 +158,7 @@ import { Lamp15Service, rgbIntToHex } from '../../lamp15.service'
                 class="btn btn-sm join-item"
                 [class.btn-active]="backgroundMode() === 'ct'"
                 (click)="setBackgroundMode('ct')"
-                [disabled]="disabled()"
+                [disabled]="!device()?.isOnline"
               >
                 CT
               </button>
@@ -145,7 +167,7 @@ import { Lamp15Service, rgbIntToHex } from '../../lamp15.service'
                 class="btn btn-sm join-item"
                 [class.btn-active]="backgroundMode() === 'color'"
                 (click)="setBackgroundMode('color')"
-                [disabled]="disabled()"
+                [disabled]="!device()?.isOnline"
               >
                 Color
               </button>
@@ -167,8 +189,22 @@ import { Lamp15Service, rgbIntToHex } from '../../lamp15.service'
                 backgroundColorTemperature.set(+$any($event.target).value)
               "
               (change)="setBackgroundColorTemperature()"
-              [disabled]="disabled()"
+              [disabled]="!device()?.isOnline"
             />
+
+            <div class="join">
+              @for (value of ctPresets; track value) {
+                <button
+                  type="button"
+                  class="btn btn-sm join-item"
+                  [class.btn-active]="backgroundColorTemperature() === value"
+                  (click)="setBackgroundColorTemperature(value)"
+                  [disabled]="!device()?.isOnline"
+                >
+                  {{ value }}K
+                </button>
+              }
+            </div>
           } @else {
             <div class="flex items-center gap-3">
               <span class="label-text">Color</span>
@@ -176,11 +212,41 @@ import { Lamp15Service, rgbIntToHex } from '../../lamp15.service'
                 type="color"
                 class="h-10 w-16 cursor-pointer rounded border-0 bg-transparent"
                 [value]="backgroundColor()"
-                (input)="backgroundColor.set($any($event.target).value)"
+                (input)="onColorPicked($any($event.target).value)"
                 (change)="setBackgroundRgb()"
-                [disabled]="disabled()"
+                [disabled]="!device()?.isOnline"
               />
+              <span class="text-sm opacity-70">
+                {{ backgroundColor() }} / hue {{ hue() }}°, sat {{ saturation() }}%
+              </span>
             </div>
+
+            <label class="label py-0">Hue {{ hue() }}°</label>
+            <input
+              type="range"
+              class="range"
+              min="0"
+              max="359"
+              step="1"
+              [value]="hue()"
+              (input)="onHsvInput('hue', +$any($event.target).value)"
+              (change)="setBackgroundHsv()"
+              [disabled]="!device()?.isOnline"
+              style="background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);"
+            />
+
+            <label class="label py-0">Saturation {{ saturation() }}%</label>
+            <input
+              type="range"
+              class="range"
+              min="0"
+              max="100"
+              step="1"
+              [value]="saturation()"
+              (input)="onHsvInput('sat', +$any($event.target).value)"
+              (change)="setBackgroundHsv()"
+              [disabled]="!device()?.isOnline"
+            />
           }
         </section>
       </div>
@@ -195,7 +261,6 @@ export class Lamp15ControlDialogComponent {
   device = model<Device | null>(null)
   visible = computed(() => !!this.device())
   did = computed(() => this.device()?.did)
-  disabled = computed(() => this.busy() || !this.device()?.isOnline)
 
   loading = signal(false)
   busy = signal(false)
@@ -208,17 +273,32 @@ export class Lamp15ControlDialogComponent {
   backgroundBrightness = signal(100)
   backgroundColorTemperature = signal(4000)
   backgroundColor = signal('#ffffff')
+  hue = signal(0)
+  saturation = signal(100)
   backgroundMode = signal<'ct' | 'color'>('ct')
 
   ctPresets = [2700, 4000, 5000, 6500]
+
+  /**
+   * 待执行命令按“通道”合并：滑块连续变化或连点按钮时只保留最新的一条，
+   * 避免拖动过程中堆积大量 RPC 请求。
+   */
+  private pending = new Map<Channel, () => Promise<unknown>>()
+  private draining = false
 
   private visibleEffect = effect(() => {
     if (!this.visible()) return
     untracked(() => {
       this.error.set(null)
+      this.pending.clear()
       void this.loadState(true)
     })
   })
+
+  retry() {
+    this.error.set(null)
+    void this.loadState(true)
+  }
 
   /** 打开面板或命令成功后读取设备真实状态 */
   private async loadState(showSpinner = false) {
@@ -226,7 +306,10 @@ export class Lamp15ControlDialogComponent {
     if (!did) return
     if (showSpinner) this.loading.set(true)
     try {
-      const state = await this.lamp.getState(did)
+      const [state, mode] = await Promise.all([
+        this.lamp.getState(did),
+        this.lamp.getBackgroundMode(did),
+      ])
       this.power.set(state.power)
       this.brightness.set(state.brightness)
       this.colorTemperature.set(state.colorTemperature)
@@ -234,7 +317,10 @@ export class Lamp15ControlDialogComponent {
       this.backgroundBrightness.set(state.backgroundBrightness)
       this.backgroundColorTemperature.set(state.backgroundColorTemperature)
       this.backgroundColor.set(rgbIntToHex(state.backgroundRgb))
-      this.error.set(null)
+      const hsv = hexToHsv(rgbIntToHex(state.backgroundRgb))
+      this.hue.set(hsv.hue)
+      this.saturation.set(hsv.saturation)
+      if (mode) this.backgroundMode.set(mode)
     } catch (err) {
       this.error.set(this.describeError(err))
     } finally {
@@ -242,18 +328,33 @@ export class Lamp15ControlDialogComponent {
     }
   }
 
-  private async run(action: Promise<unknown>) {
-    if (this.busy()) return false
-    this.busy.set(true)
+  private submit(channel: Channel, action: () => Promise<unknown>) {
     this.error.set(null)
+    this.pending.set(channel, action)
+    void this.drain()
+  }
+
+  private async drain() {
+    if (this.draining) return
+    this.draining = true
+    this.busy.set(true)
     try {
-      await action
+      while (this.pending.size) {
+        const entry = this.pending.entries().next().value as [
+          Channel,
+          () => Promise<unknown>,
+        ]
+        this.pending.delete(entry[0])
+        try {
+          await entry[1]()
+        } catch (err) {
+          this.error.set(this.describeError(err))
+          continue
+        }
+      }
       await this.loadState()
-      return true
-    } catch (err) {
-      this.error.set(this.describeError(err))
-      return false
     } finally {
+      this.draining = false
       this.busy.set(false)
     }
   }
@@ -274,21 +375,28 @@ export class Lamp15ControlDialogComponent {
     const previous = this.power()
     const target = !previous
     this.power.set(target)
-    void this.run(this.lamp.setMainPower(did, target)).then((ok) => {
-      if (!ok) this.power.set(previous)
+    this.submit('main-power', async () => {
+      try {
+        await this.lamp.setMainPower(did, target)
+      } catch (err) {
+        this.power.set(previous)
+        throw err
+      }
     })
   }
 
   setMainBrightness() {
     const did = this.did()
-    if (did) void this.run(this.lamp.setMainBrightness(did, this.brightness()))
+    const value = this.brightness()
+    if (!did) return
+    this.submit('main-bright', () => this.lamp.setMainBrightness(did, value))
   }
 
   setMainColorTemperature(value = this.colorTemperature()) {
     const did = this.did()
     if (!did) return
     this.colorTemperature.set(value)
-    void this.run(this.lamp.setMainColorTemperature(did, value))
+    this.submit('main-ct', () => this.lamp.setMainColorTemperature(did, value))
   }
 
   toggleBackgroundPower() {
@@ -297,49 +405,72 @@ export class Lamp15ControlDialogComponent {
     const previous = this.backgroundPower()
     const target = !previous
     this.backgroundPower.set(target)
-    void this.run(this.lamp.setBackgroundPower(did, target)).then((ok) => {
-      if (!ok) this.backgroundPower.set(previous)
+    this.submit('bg-power', async () => {
+      try {
+        await this.lamp.setBackgroundPower(did, target)
+      } catch (err) {
+        this.backgroundPower.set(previous)
+        throw err
+      }
     })
   }
 
   setBackgroundBrightness() {
     const did = this.did()
-    if (did) {
-      void this.run(this.lamp.setBackgroundBrightness(did, this.backgroundBrightness()))
-    }
+    const value = this.backgroundBrightness()
+    if (!did) return
+    this.submit('bg-bright', () =>
+      this.lamp.setBackgroundBrightness(did, value)
+    )
   }
 
-  setBackgroundColorTemperature() {
+  setBackgroundColorTemperature(value = this.backgroundColorTemperature()) {
     const did = this.did()
-    if (did) {
-      void this.run(
-        this.lamp.setBackgroundColorTemperature(
-          did,
-          this.backgroundColorTemperature()
-        )
-      )
-    }
+    if (!did) return
+    this.backgroundColorTemperature.set(value)
+    this.submit('bg-ct', () =>
+      this.lamp.setBackgroundColorTemperature(did, value)
+    )
   }
 
   /** 切换色温/彩色模式时，立即发送一次对应命令，确保设备模式与面板一致 */
   setBackgroundMode(mode: 'ct' | 'color') {
-    const did = this.did()
-    if (!did) return
+    if (!this.did()) return
     this.backgroundMode.set(mode)
     if (mode === 'ct') {
-      void this.run(
-        this.lamp.setBackgroundColorTemperature(
-          did,
-          this.backgroundColorTemperature()
-        )
-      )
+      this.setBackgroundColorTemperature()
     } else {
-      void this.run(this.lamp.setBackgroundRgb(did, this.backgroundColor()))
+      this.setBackgroundRgb()
     }
+  }
+
+  onColorPicked(hex: string) {
+    this.backgroundColor.set(hex)
+    const hsv = hexToHsv(hex)
+    this.hue.set(hsv.hue)
+    this.saturation.set(hsv.saturation)
+  }
+
+  onHsvInput(field: 'hue' | 'sat', value: number) {
+    if (field === 'hue') this.hue.set(value)
+    else this.saturation.set(value)
+    this.backgroundColor.set(hsvToHex(this.hue(), this.saturation()))
   }
 
   setBackgroundRgb() {
     const did = this.did()
-    if (did) void this.run(this.lamp.setBackgroundRgb(did, this.backgroundColor()))
+    const color = this.backgroundColor()
+    if (!did) return
+    this.submit('bg-color', () => this.lamp.setBackgroundRgb(did, color))
+  }
+
+  setBackgroundHsv() {
+    const did = this.did()
+    const hue = this.hue()
+    const saturation = this.saturation()
+    if (!did) return
+    this.submit('bg-color', () =>
+      this.lamp.setBackgroundHsv(did, hue, saturation)
+    )
   }
 }
