@@ -18,8 +18,8 @@
 
 ## 使用方法
 
-1. 下载 `MiHomeToolkit-<版本>-windows-x64-portable.zip` 并解压到任意目录
-2. 双击 `mi-home-toolkit.exe` 运行，无需安装
+1. 下载 `MiHomeToolkit-<版本>-windows-x64.exe`，放到任意目录
+2. 双击运行，无需安装、无需解压
 3. 使用小米账号登录；首次登录可能需要进行验证码或二次验证
 4. 在设备列表中，`yeelink.light.lamp15` 设备卡片上会显示灯光控制按钮
 

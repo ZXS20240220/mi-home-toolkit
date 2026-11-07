@@ -92,7 +92,7 @@ jobs:
       - name: Build portable executable
         run: pnpm tauri build --no-bundle
 
-      - name: Package portable zip
+      - name: Prepare portable exe
         shell: pwsh
         run: |
           $version = "${{ needs.check.outputs.version }}"
@@ -103,13 +103,9 @@ jobs:
           }
 
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          New-Item -ItemType Directory -Force -Path staging | Out-Null
-          Copy-Item $exe staging/
-          Copy-Item doc/RELEASE_NOTES.md staging/README.md
-
-          $zip = "artifacts/MiHomeToolkit-$version-windows-x64-portable.zip"
-          Compress-Archive -Path staging/* -DestinationPath $zip -Force
-          Get-Item $zip | Select-Object Name, Length
+          $dest = "artifacts/MiHomeToolkit-$version-windows-x64.exe"
+          Copy-Item $exe $dest
+          Get-Item $dest | Select-Object Name, Length
 
       - name: Compose release notes
         shell: pwsh
@@ -131,4 +127,4 @@ jobs:
           body_path: ${{ runner.temp }}/release-body.md
           draft: false
           overwrite_files: true
-          files: artifacts/*.zip
+          files: artifacts/*.exe
