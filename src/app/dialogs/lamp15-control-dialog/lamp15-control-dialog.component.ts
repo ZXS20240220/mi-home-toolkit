@@ -6,6 +6,7 @@ import {
   model,
   signal,
   untracked,
+  type WritableSignal,
 } from '@angular/core'
 import { Device } from '../../types'
 import { DialogDirective } from '../dialog.directive'
@@ -26,6 +27,9 @@ type Channel =
   | 'bg-bright'
   | 'bg-ct'
   | 'bg-color'
+
+/** 两次开关操作之间的最短间隔，让设备有时间执行完上一次状态切换 */
+const POWER_TOGGLE_COOLDOWN_MS = 1000
 
 @Component({
   selector: 'app-lamp15-control-dialog',
@@ -86,7 +90,7 @@ type Channel =
           type="button"
           class="btn btn-sm btn-outline"
           (click)="toggleAll()"
-          [disabled]="!device()?.isOnline"
+          [disabled]="!device()?.isOnline || allPowerLocked()"
         >
           Toggle all lights
         </button>
@@ -103,7 +107,7 @@ type Channel =
               class="toggle"
               [checked]="power()"
               (change)="toggleMainPower()"
-              [disabled]="!device()?.isOnline"
+              [disabled]="!device()?.isOnline || mainPowerLocked()"
             />
             <span>{{ power() ? 'On' : 'Off' }}</span>
           </label>
@@ -162,7 +166,7 @@ type Channel =
               class="toggle"
               [checked]="backgroundPower()"
               (change)="toggleBackgroundPower()"
-              [disabled]="!device()?.isOnline"
+              [disabled]="!device()?.isOnline || backgroundPowerLocked()"
             />
             <span>{{ backgroundPower() ? 'On' : 'Off' }}</span>
           </label>
@@ -311,6 +315,11 @@ export class Lamp15ControlDialogComponent {
   busy = signal(false)
   error = signal<string | null>(null)
 
+  /** 开关防抖：命令发出后短暂锁定对应开关，避免快速连点把设备状态机打乱 */
+  mainPowerLocked = signal(false)
+  backgroundPowerLocked = signal(false)
+  allPowerLocked = signal(false)
+
   power = signal(false)
   brightness = signal(100)
   colorTemperature = signal(4000)
@@ -391,6 +400,12 @@ export class Lamp15ControlDialogComponent {
     })
   }
 
+  /** 锁定开关一小段时间，超时后自动解锁；锁定期间对应控件同时被禁用 */
+  private startPowerCooldown(lock: WritableSignal<boolean>) {
+    lock.set(true)
+    setTimeout(() => lock.set(false), POWER_TOGGLE_COOLDOWN_MS)
+  }
+
   private async drain() {
     if (this.draining) return
     this.draining = true
@@ -460,7 +475,8 @@ export class Lamp15ControlDialogComponent {
 
   toggleMainPower() {
     const did = this.did()
-    if (!did) return
+    if (!did || this.mainPowerLocked()) return
+    this.startPowerCooldown(this.mainPowerLocked)
     const previous = this.power()
     const target = !previous
     this.power.set(target)
@@ -479,7 +495,8 @@ export class Lamp15ControlDialogComponent {
   /** 整体开关：调用的 dev_toggle 由设备自行决定目标状态，执行后回读真实状态 */
   toggleAll() {
     const did = this.did()
-    if (!did) return
+    if (!did || this.allPowerLocked()) return
+    this.startPowerCooldown(this.allPowerLocked)
     this.submit('dev-power', () => this.lamp.toggleAll(did))
   }
 
@@ -499,7 +516,8 @@ export class Lamp15ControlDialogComponent {
 
   toggleBackgroundPower() {
     const did = this.did()
-    if (!did) return
+    if (!did || this.backgroundPowerLocked()) return
+    this.startPowerCooldown(this.backgroundPowerLocked)
     const previous = this.backgroundPower()
     const target = !previous
     this.backgroundPower.set(target)
