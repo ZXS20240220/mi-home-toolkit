@@ -239,6 +239,13 @@ fn main() {
             call_device
         ])
         .setup(|app| {
+            // 标题跟随应用版本号（版本由 tauri.conf.json 引用 package.json）：
+            // 每次发版后随版本自动更新，避免标题与实际版本不一致。
+            if let Some(window) = app.get_webview_window("main") {
+                let version = app.package_info().version.clone();
+                let _ = window.set_title(&format!("Mi Home Toolkit v{version}"));
+            }
+
             let mi = MI_CLOUD_PROTOCOL.get_or_init(MiCloudProtocol::new);
             let app_handle = app.handle().clone();
 
