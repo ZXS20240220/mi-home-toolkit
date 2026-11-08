@@ -31,6 +31,30 @@ type Channel =
 /** 两次开关操作之间的最短间隔，让设备有时间执行完上一次状态切换 */
 const POWER_TOGGLE_COOLDOWN_MS = 1000
 
+type WheelSlider =
+  | 'main-bright'
+  | 'main-ct'
+  | 'bg-bright'
+  | 'bg-ct'
+  | 'hue'
+  | 'sat'
+
+/** 滚轮微调的步长与范围，与模板中各滑块的 min/max/step 保持一致 */
+const WHEEL_RANGES: Record<
+  WheelSlider,
+  { min: number; max: number; step: number }
+> = {
+  'main-bright': { min: 1, max: 100, step: 1 },
+  'main-ct': { min: 2700, max: 6500, step: 50 },
+  'bg-bright': { min: 1, max: 100, step: 1 },
+  'bg-ct': { min: 2700, max: 6500, step: 50 },
+  hue: { min: 0, max: 359, step: 1 },
+  sat: { min: 0, max: 100, step: 1 },
+}
+
+/** 滚轮停止后再提交，避免一次滚动发送一串命令 */
+const WHEEL_COMMIT_DELAY_MS = 350
+
 @Component({
   selector: 'app-lamp15-control-dialog',
   template: ` <dialog class="modal" app-dialog [visible]="visible()">
@@ -122,6 +146,7 @@ const POWER_TOGGLE_COOLDOWN_MS = 1000
             [value]="brightness()"
             (input)="brightness.set(+$any($event.target).value)"
             (change)="setMainBrightness()"
+            (wheel)="onWheel('main-bright', $event)"
             [disabled]="!device()?.isOnline"
           />
 
@@ -137,6 +162,7 @@ const POWER_TOGGLE_COOLDOWN_MS = 1000
             [value]="colorTemperature()"
             (input)="colorTemperature.set(+$any($event.target).value)"
             (change)="setMainColorTemperature()"
+            (wheel)="onWheel('main-ct', $event)"
             [disabled]="!device()?.isOnline"
           />
 
@@ -183,6 +209,7 @@ const POWER_TOGGLE_COOLDOWN_MS = 1000
             [value]="backgroundBrightness()"
             (input)="backgroundBrightness.set(+$any($event.target).value)"
             (change)="setBackgroundBrightness()"
+            (wheel)="onWheel('bg-bright', $event)"
             [disabled]="!device()?.isOnline"
           />
 
@@ -225,6 +252,7 @@ const POWER_TOGGLE_COOLDOWN_MS = 1000
                 backgroundColorTemperature.set(+$any($event.target).value)
               "
               (change)="setBackgroundColorTemperature()"
+              (wheel)="onWheel('bg-ct', $event)"
               [disabled]="!device()?.isOnline"
             />
 
@@ -280,6 +308,7 @@ const POWER_TOGGLE_COOLDOWN_MS = 1000
                 [value]="hue()"
                 (input)="onHsvInput('hue', +$any($event.target).value)"
                 (change)="setBackgroundRgb()"
+                (wheel)="onWheel('hue', $event)"
                 [disabled]="!device()?.isOnline || saturation() === 0"
               />
             </div>
@@ -294,6 +323,7 @@ const POWER_TOGGLE_COOLDOWN_MS = 1000
               [value]="saturation()"
               (input)="onHsvInput('sat', +$any($event.target).value)"
               (change)="setBackgroundRgb()"
+              (wheel)="onWheel('sat', $event)"
               [disabled]="!device()?.isOnline"
             />
           }
@@ -342,6 +372,7 @@ export class Lamp15ControlDialogComponent {
   private expectedPower = new Map<Channel, boolean>()
   private draining = false
   private drainPromise: Promise<void> | null = null
+  private wheelTimers = new Map<WheelSlider, number>()
 
   private visibleEffect = effect(() => {
     if (!this.visible()) return
@@ -404,6 +435,95 @@ export class Lamp15ControlDialogComponent {
   private startPowerCooldown(lock: WritableSignal<boolean>) {
     lock.set(true)
     setTimeout(() => lock.set(false), POWER_TOGGLE_COOLDOWN_MS)
+  }
+
+  /**
+   * 控制条支持滚轮微调：阻止页面滚动，每次滚动按 step 走一档，
+   * 停下约 350ms 后再合并成一次 RPC，避免一次手势发出几十条命令。
+   */
+  onWheel(field: WheelSlider, event: WheelEvent) {
+    event.preventDefault()
+    if (!this.did()) return
+    if (field === 'hue' && this.saturation() === 0) return
+
+    const { min, max, step } = WHEEL_RANGES[field]
+    const current = this.readSliderValue(field)
+    const next = Math.max(
+      min,
+      Math.min(max, current + (event.deltaY < 0 ? step : -step))
+    )
+    if (next === current) return
+
+    this.writeSliderValue(field, next)
+    this.scheduleWheelCommit(field)
+  }
+
+  private readSliderValue(field: WheelSlider) {
+    switch (field) {
+      case 'main-bright':
+        return this.brightness()
+      case 'main-ct':
+        return this.colorTemperature()
+      case 'bg-bright':
+        return this.backgroundBrightness()
+      case 'bg-ct':
+        return this.backgroundColorTemperature()
+      case 'hue':
+        return this.hue()
+      case 'sat':
+        return this.saturation()
+    }
+  }
+
+  private writeSliderValue(field: WheelSlider, value: number) {
+    switch (field) {
+      case 'main-bright':
+        this.brightness.set(value)
+        break
+      case 'main-ct':
+        this.colorTemperature.set(value)
+        break
+      case 'bg-bright':
+        this.backgroundBrightness.set(value)
+        break
+      case 'bg-ct':
+        this.backgroundColorTemperature.set(value)
+        break
+      case 'hue':
+      case 'sat':
+        this.onHsvInput(field, value)
+        break
+    }
+  }
+
+  private scheduleWheelCommit(field: WheelSlider) {
+    const timer = this.wheelTimers.get(field)
+    if (timer) clearTimeout(timer)
+
+    this.wheelTimers.set(
+      field,
+      window.setTimeout(() => {
+        this.wheelTimers.delete(field)
+        switch (field) {
+          case 'main-bright':
+            this.setMainBrightness()
+            break
+          case 'main-ct':
+            this.setMainColorTemperature()
+            break
+          case 'bg-bright':
+            this.setBackgroundBrightness()
+            break
+          case 'bg-ct':
+            this.setBackgroundColorTemperature()
+            break
+          case 'hue':
+          case 'sat':
+            this.setBackgroundRgb()
+            break
+        }
+      }, WHEEL_COMMIT_DELAY_MS)
+    )
   }
 
   private async drain() {
