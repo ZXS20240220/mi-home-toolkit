@@ -147,7 +147,7 @@ const WHEEL_COMMIT_DELAY_MS = 350
             (input)="brightness.set(+$any($event.target).value)"
             (change)="setMainBrightness()"
             (wheel)="onWheel('main-bright', $event)"
-            [disabled]="!device()?.isOnline"
+            [disabled]="!device()?.isOnline || !power()"
           />
 
           <label class="label py-0">
@@ -163,7 +163,7 @@ const WHEEL_COMMIT_DELAY_MS = 350
             (input)="colorTemperature.set(+$any($event.target).value)"
             (change)="setMainColorTemperature()"
             (wheel)="onWheel('main-ct', $event)"
-            [disabled]="!device()?.isOnline"
+            [disabled]="!device()?.isOnline || !power()"
           />
 
           <div class="join">
@@ -173,7 +173,7 @@ const WHEEL_COMMIT_DELAY_MS = 350
                 class="btn btn-sm join-item"
                 [class.btn-active]="colorTemperature() === value"
                 (click)="setMainColorTemperature(value)"
-                [disabled]="!device()?.isOnline"
+                [disabled]="!device()?.isOnline || !power()"
               >
                 {{ value }}K
               </button>
@@ -210,7 +210,7 @@ const WHEEL_COMMIT_DELAY_MS = 350
             (input)="backgroundBrightness.set(+$any($event.target).value)"
             (change)="setBackgroundBrightness()"
             (wheel)="onWheel('bg-bright', $event)"
-            [disabled]="!device()?.isOnline"
+            [disabled]="!device()?.isOnline || !backgroundPower()"
           />
 
           <div class="flex items-center gap-3">
@@ -221,7 +221,7 @@ const WHEEL_COMMIT_DELAY_MS = 350
                 class="btn btn-sm join-item"
                 [class.btn-active]="backgroundMode() === 'ct'"
                 (click)="setBackgroundMode('ct')"
-                [disabled]="!device()?.isOnline"
+                [disabled]="!device()?.isOnline || !backgroundPower()"
               >
                 CT
               </button>
@@ -230,7 +230,7 @@ const WHEEL_COMMIT_DELAY_MS = 350
                 class="btn btn-sm join-item"
                 [class.btn-active]="backgroundMode() === 'color'"
                 (click)="setBackgroundMode('color')"
-                [disabled]="!device()?.isOnline"
+                [disabled]="!device()?.isOnline || !backgroundPower()"
               >
                 Color
               </button>
@@ -253,7 +253,7 @@ const WHEEL_COMMIT_DELAY_MS = 350
               "
               (change)="setBackgroundColorTemperature()"
               (wheel)="onWheel('bg-ct', $event)"
-              [disabled]="!device()?.isOnline"
+              [disabled]="!device()?.isOnline || !backgroundPower()"
             />
 
             <div class="join">
@@ -263,7 +263,7 @@ const WHEEL_COMMIT_DELAY_MS = 350
                   class="btn btn-sm join-item"
                   [class.btn-active]="backgroundColorTemperature() === value"
                   (click)="setBackgroundColorTemperature(value)"
-                  [disabled]="!device()?.isOnline"
+                  [disabled]="!device()?.isOnline || !backgroundPower()"
                 >
                   {{ value }}K
                 </button>
@@ -278,7 +278,7 @@ const WHEEL_COMMIT_DELAY_MS = 350
                 [value]="backgroundColor()"
                 (input)="onColorPicked($any($event.target).value)"
                 (change)="setBackgroundRgb()"
-                [disabled]="!device()?.isOnline"
+                [disabled]="!device()?.isOnline || !backgroundPower()"
               />
               <span class="text-sm opacity-70">
                 {{ backgroundColor() }} / hue {{ hue() }}°, sat {{ saturation() }}%
@@ -309,7 +309,11 @@ const WHEEL_COMMIT_DELAY_MS = 350
                 (input)="onHsvInput('hue', +$any($event.target).value)"
                 (change)="setBackgroundRgb()"
                 (wheel)="onWheel('hue', $event)"
-                [disabled]="!device()?.isOnline || saturation() === 0"
+                [disabled]="
+                  !device()?.isOnline ||
+                  !backgroundPower() ||
+                  saturation() === 0
+                "
               />
             </div>
 
@@ -324,7 +328,7 @@ const WHEEL_COMMIT_DELAY_MS = 350
               (input)="onHsvInput('sat', +$any($event.target).value)"
               (change)="setBackgroundRgb()"
               (wheel)="onWheel('sat', $event)"
-              [disabled]="!device()?.isOnline"
+              [disabled]="!device()?.isOnline || !backgroundPower()"
             />
           }
         </section>
@@ -444,6 +448,9 @@ export class Lamp15ControlDialogComponent {
   onWheel(field: WheelSlider, event: WheelEvent) {
     event.preventDefault()
     if (!this.did()) return
+    const isMainSlider = field === 'main-bright' || field === 'main-ct'
+    if (isMainSlider && !this.power()) return
+    if (!isMainSlider && !this.backgroundPower()) return
     if (field === 'hue' && this.saturation() === 0) return
 
     const { min, max, step } = WHEEL_RANGES[field]
@@ -504,6 +511,9 @@ export class Lamp15ControlDialogComponent {
       field,
       window.setTimeout(() => {
         this.wheelTimers.delete(field)
+        const isMainSlider = field === 'main-bright' || field === 'main-ct'
+        if (isMainSlider && !this.power()) return
+        if (!isMainSlider && !this.backgroundPower()) return
         switch (field) {
           case 'main-bright':
             this.setMainBrightness()
