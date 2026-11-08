@@ -253,7 +253,14 @@ type Channel =
               </span>
             </div>
 
-            <label class="label py-0">Hue {{ hue() }}°</label>
+            <label class="label py-0">
+              Hue {{ hue() }}°
+              @if (saturation() === 0) {
+                <span class="text-xs font-normal opacity-60">
+                  — saturation 0%, hue has no effect
+                </span>
+              }
+            </label>
             <div class="relative flex w-full items-center">
               <div
                 class="pointer-events-none absolute inset-x-0 top-1/2 h-3 -translate-y-1/2 rounded-full"
@@ -269,7 +276,7 @@ type Channel =
                 [value]="hue()"
                 (input)="onHsvInput('hue', +$any($event.target).value)"
                 (change)="setBackgroundRgb()"
-                [disabled]="!device()?.isOnline"
+                [disabled]="!device()?.isOnline || saturation() === 0"
               />
             </div>
 
