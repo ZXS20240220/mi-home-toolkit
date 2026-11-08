@@ -200,9 +200,16 @@ async fn call_device(did: String, method: String, params: Option<String>) -> Res
     let params = params
         .map(|params| Value::from_str(params.as_str()).map_err(|err| err.to_string()))
         .transpose()?;
-    mi.call_device(&did, &method, params, None)
+    log::info!("call_device method={method} params={params:?}");
+    let result = mi
+        .call_device(&did, &method, params, None)
         .await
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string());
+    match &result {
+        Ok(value) => log::info!("call_device ok method={method} result={value}"),
+        Err(err) => log::warn!("call_device failed method={method} error={err}"),
+    }
+    result
 }
 
 fn main() {

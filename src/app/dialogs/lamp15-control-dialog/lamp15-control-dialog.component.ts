@@ -268,7 +268,7 @@ type Channel =
                 step="1"
                 [value]="hue()"
                 (input)="onHsvInput('hue', +$any($event.target).value)"
-                (change)="setBackgroundHsv()"
+                (change)="setBackgroundRgb()"
                 [disabled]="!device()?.isOnline"
               />
             </div>
@@ -282,7 +282,7 @@ type Channel =
               step="1"
               [value]="saturation()"
               (input)="onHsvInput('sat', +$any($event.target).value)"
-              (change)="setBackgroundHsv()"
+              (change)="setBackgroundRgb()"
               [disabled]="!device()?.isOnline"
             />
           }
@@ -419,11 +419,13 @@ export class Lamp15ControlDialogComponent {
 
     const failures: string[] = []
     const main = this.expectedPower.get('main-power')
+    const background = this.expectedPower.get('bg-power')
     if (main != null && this.power() !== main) {
       failures.push(`主灯未能${main ? '开启' : '关闭'}`)
     }
-    const background = this.expectedPower.get('bg-power')
-    if (background != null && this.backgroundPower() !== background) {
+    const backgroundStuck =
+      background != null && this.backgroundPower() !== background
+    if (backgroundStuck) {
       failures.push(`背景灯未能${background ? '开启' : '关闭'}`)
     }
     this.expectedPower.clear()
@@ -431,7 +433,10 @@ export class Lamp15ControlDialogComponent {
     if (failures.length) {
       this.error.set(
         `设备返回成功，但状态没有改变：${failures.join('；')}。` +
-          '请检查设备供电、固件版本，或改用米家 App 验证。'
+          (backgroundStuck
+            ? '背景灯通道可能已卡死，只能断电复位：拔插电源适配器并连续开关灯 5 次' +
+              '（每次开、关约 2 秒），灯出现呼吸效果后即恢复。'
+            : '请检查设备供电、固件版本，或改用米家 App 验证。')
       )
     }
   }
@@ -550,15 +555,5 @@ export class Lamp15ControlDialogComponent {
     const color = this.backgroundColor()
     if (!did) return
     this.submit('bg-color', () => this.lamp.setBackgroundRgb(did, color))
-  }
-
-  setBackgroundHsv() {
-    const did = this.did()
-    const hue = this.hue()
-    const saturation = this.saturation()
-    if (!did) return
-    this.submit('bg-color', () =>
-      this.lamp.setBackgroundHsv(did, hue, saturation)
-    )
   }
 }

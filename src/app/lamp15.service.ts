@@ -35,10 +35,16 @@ export type Lamp15State = {
   backgroundRgb: number
 }
 
+/** 空字符串是 Yeelight 表示“该属性当前不可用”，不能按 Number('') === 0 处理 */
 function toNumber(value: unknown, fallback: number) {
+  if (value == null) return fallback
+  if (typeof value === 'string' && value.trim() === '') return fallback
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : fallback
 }
+
+/** 背景灯在非彩色模式下 `bg_rgb` 会返回 "" 或 "0"，统一回退到白色 */
+const DEFAULT_BACKGROUND_RGB = 0xffffff
 
 /** Yeelight 用 "on"/"off" 表示开关；空字符串或未知值表示该属性不可用 */
 function toPower(value: unknown): boolean | null {
@@ -64,7 +70,8 @@ export function parseLamp15State(raw: unknown): Lamp15State {
     backgroundPower: toPower(at('bg_power')) ?? false,
     backgroundBrightness: toNumber(at('bg_bright'), 100),
     backgroundColorTemperature: toNumber(at('bg_ct'), 4000),
-    backgroundRgb: toNumber(at('bg_rgb'), 0xffffff),
+    backgroundRgb:
+      toNumber(at('bg_rgb'), DEFAULT_BACKGROUND_RGB) || DEFAULT_BACKGROUND_RGB,
   }
 }
 
@@ -107,10 +114,15 @@ export function assertCommandOk(result: unknown) {
   }
 }
 
+/**
+ * #rrggbb 转十进制 RGB。lamp15 的后灯带经验协议明确说明 `0x000000`
+ * 属于未定义行为，应避免下发；这里把纯黑抬到最小合法值 1。
+ */
 export function hexToRgbInt(hex: string) {
-  const normalized = hex.replace('#', '')
+  const normalized = hex.replace('#', '').trim()
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return DEFAULT_BACKGROUND_RGB
   const value = Number.parseInt(normalized, 16)
-  return Number.isFinite(value) ? value : 0xffffff
+  return value === 0 ? 1 : value
 }
 
 /** HSV 转 #rrggbb，用于在 UI 中预览色相/饱和度控件的结果 */
@@ -243,17 +255,15 @@ export class Lamp15Service {
     ])
   }
 
+  /**
+   * 背景灯颜色一律走 `bg_set_rgb`，不要用 `bg_set_hsv`。
+   * 实机日志证实：背景灯进入 HSV 模式（`bg_lmode=3`）后再关闭/打开，
+   * 固件会卡死——所有 bg_* 命令都返回 ok 但状态不再变化，只能断电重置恢复。
+   * 因此色相/饱和度控件在本地换算成 RGB 后调用本方法。
+   */
   setBackgroundRgb(did: string, hex: string) {
-    return this.call(did, 'bg_set_rgb', [hexToRgbInt(hex), 'smooth', 300])
-  }
-
-  setBackgroundHsv(did: string, hue: number, saturation: number) {
-    return this.call(did, 'bg_set_hsv', [
-      clamp(hue, 0, 359),
-      clamp(saturation, 0, 100),
-      'smooth',
-      300,
-    ])
+    const rgb = hexToRgbInt(hex)
+    return this.call(did, 'bg_set_rgb', [rgb, 'smooth', 300])
   }
 }
 
