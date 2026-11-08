@@ -6,6 +6,7 @@ export const LAMP15_MODEL = 'yeelink.light.lamp15'
 
 const LAMP15_PROPS = [
   'power',
+  'main_power',
   'bright',
   'ct',
   'color_mode',
@@ -15,7 +16,14 @@ const LAMP15_PROPS = [
   'bg_rgb',
   'bg_hue',
   'bg_sat',
-]
+] as const
+
+type Lamp15Prop = (typeof LAMP15_PROPS)[number]
+
+/** get_prop 按请求顺序返回数组，用名称到索引的映射取值，避免手写魔法数字 */
+const PROP_INDEX = Object.fromEntries(
+  LAMP15_PROPS.map((name, index) => [name, index])
+) as Record<Lamp15Prop, number>
 
 export type Lamp15State = {
   power: boolean
@@ -32,17 +40,31 @@ function toNumber(value: unknown, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+/** Yeelight 用 "on"/"off" 表示开关；空字符串或未知值表示该属性不可用 */
+function toPower(value: unknown): boolean | null {
+  const text = String(value ?? '').trim().toLowerCase()
+  if (text === 'on' || text === '1' || text === 'true') return true
+  if (text === 'off' || text === '0' || text === 'false') return false
+  return null
+}
+
 /** Yeelight 的 get_prop 返回值可能是字符串形式的数组，这里统一做类型归一化 */
 export function parseLamp15State(raw: unknown): Lamp15State {
   const values = Array.isArray(raw) ? raw : []
+  const at = (name: Lamp15Prop) => values[PROP_INDEX[name]]
+
+  // 双灯设备（如挂灯）的 `power` 是设备总状态：只开背景灯时它也会返回 on，
+  // 主灯的真实状态必须读 `main_power`。固件不支持该属性时回退到 `power`。
+  const mainPower = toPower(at('main_power')) ?? toPower(at('power'))
+
   return {
-    power: values[0] === 'on',
-    brightness: toNumber(values[1], 100),
-    colorTemperature: toNumber(values[2], 4000),
-    backgroundPower: values[4] === 'on',
-    backgroundBrightness: toNumber(values[5], 100),
-    backgroundColorTemperature: toNumber(values[6], 4000),
-    backgroundRgb: toNumber(values[7], 0xffffff),
+    power: mainPower ?? false,
+    brightness: toNumber(at('bright'), 100),
+    colorTemperature: toNumber(at('ct'), 4000),
+    backgroundPower: toPower(at('bg_power')) ?? false,
+    backgroundBrightness: toNumber(at('bg_bright'), 100),
+    backgroundColorTemperature: toNumber(at('bg_ct'), 4000),
+    backgroundRgb: toNumber(at('bg_rgb'), 0xffffff),
   }
 }
 
@@ -161,8 +183,9 @@ export class Lamp15Service {
   }
 
   getState(did: string) {
-    return this.mi.getProp({ did, name: LAMP15_PROPS }).then((raw) => {
-      if (!Array.isArray(raw) || raw.length < 8) {
+    return this.mi.getProp({ did, name: [...LAMP15_PROPS] }).then((raw) => {
+      // 至少要有到 bg_rgb 的返回值，否则说明设备返回了不完整的状态
+      if (!Array.isArray(raw) || raw.length <= PROP_INDEX.bg_rgb) {
         throw new Error(`读取灯光状态失败，设备返回：${JSON.stringify(raw)}`)
       }
       return parseLamp15State(raw)
