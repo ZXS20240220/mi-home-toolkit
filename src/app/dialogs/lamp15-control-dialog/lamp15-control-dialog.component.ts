@@ -541,20 +541,25 @@ export class Lamp15ControlDialogComponent {
     this.draining = true
     this.busy.set(true)
     try {
-      while (this.pending.size) {
-        const entry = this.pending.entries().next().value as [
-          Channel,
-          () => Promise<unknown>,
-        ]
-        this.pending.delete(entry[0])
-        try {
-          await entry[1]()
-        } catch (err) {
-          this.error.set(this.describeError(err))
-          continue
+      while (true) {
+        while (this.pending.size) {
+          const entry = this.pending.entries().next().value as [
+            Channel,
+            () => Promise<unknown>,
+          ]
+          this.pending.delete(entry[0])
+          try {
+            await entry[1]()
+          } catch (err) {
+            this.error.set(this.describeError(err))
+            continue
+          }
         }
+        await this.loadState()
+        // loadState() 等待期间 submit() 可能又加入了新命令。此时 drainPromise
+        // 仍存在，submit 不会启动新的 drain，因此这里必须继续消费，否则命令会滞留。
+        if (this.pending.size === 0) break
       }
-      await this.loadState()
       this.verifyPowerApplied()
     } finally {
       this.draining = false

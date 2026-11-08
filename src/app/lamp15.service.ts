@@ -59,9 +59,15 @@ export function parseLamp15State(raw: unknown): Lamp15State {
   const values = Array.isArray(raw) ? raw : []
   const at = (name: Lamp15Prop) => values[PROP_INDEX[name]]
 
+  const backgroundPower = toPower(at('bg_power'))
+  const totalPower = toPower(at('power'))
+
   // 双灯设备（如挂灯）的 `power` 是设备总状态：只开背景灯时它也会返回 on，
-  // 主灯的真实状态必须读 `main_power`。固件不支持该属性时回退到 `power`。
-  const mainPower = toPower(at('main_power')) ?? toPower(at('power'))
+  // 主灯的真实状态必须读 `main_power`。仅在 `power` 语义确定时回退：
+  // 背景灯确定关闭（此时 `power` 即主灯），或设备总电源确定关闭。
+  const mainPower =
+    toPower(at('main_power')) ??
+    (backgroundPower === false || totalPower === false ? totalPower : null)
 
   return {
     power: mainPower ?? false,
